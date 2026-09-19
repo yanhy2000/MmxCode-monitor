@@ -101,6 +101,34 @@ $MINIMAX_DATA_DIR/v2/sqlite/runtime-state.sqlite
 
 **关于缓存命中率的数据来源**：`usage.cache_read` 是**服务端下发**的权威值，客户端也会用本地 tokenizer 估算一份（`context_usage_telemetry.localTokens`），两者存在约 3~4% 的稳定偏差，对应字段 `context_usage_telemetry.divergenceRate`。本工具一律采用服务端数值，客户端估算仅作为一致性参考。
 
+### 为什么是三项相加（而不是像 GLM 那样两项相加）
+
+不同厂商 API 对"输入 token"的定义不同，直接照抄公式会算错：
+
+| 语义 | 代表 | 官方 total 公式 | `input_tokens` 是否含缓存 |
+| --- | --- | --- | --- |
+| Anthropic 系 | **MiniMax** | `input + cache_read + output` | ❌ 不含（缓存是**并存字段**） |
+| OpenAI 系 | GLM / DeepSeek | `input + output` | ✅ 含（缓存是 input 的**子集**） |
+
+两者表达的其实是同一个量——**全部输入（含缓存）+ 输出**，只是加法位置不同。
+
+本工具采用 MiniMax 的 Anthropic 系公式，并已在本地库中逐行验证与官方字段一致：
+
+- `local_runtime_token_usage.raw` 的 `totalTokens` = `input + output + cacheRead` → **578/578 行吻合**
+- `local_runtime_message_rows.data_json` 的 `usage.total_tokens` = 同式 → **613/615 行吻合**（另 2 行字段为 NULL）
+
+⚠️ 若改成 `input + output`，在 MiniMax 数据上会**少算约 98%**（缓存占输入总量 96%+）；反之若把本公式套到 GLM 数据上，则会**重复计算缓存**导致虚高。
+
+### 与产品内「用量」页面的差异
+
+MiniMax Code 产品内的用量页（设置 → 用量）与本工具统计的是**同一份用量**，但存在已知的观测差异：
+
+- 实测对比：产品内显示 `15.97M / 缓存命中 98.5%`，本工具同期显示 `39.38M / 95.92%`（MiniMax-M3 单模型口径）
+- 已排除的原因：模型拆分、会话拆分、主/子 Agent 拆分、按小时切分、重复计数（重复行仅约 2.07M，且跨会话）
+- 最可能的原因：**服务端用量统计存在延迟/最终一致性**，产品内数字落后于本地实时库
+
+> 结论以产品内展示为准（官方文档明确"具体计费和额度规则以产品内展示为准"）。本工具读取的是本地运行时库，属于近实时观测，适合看趋势和分布，不适合作为计费依据。
+
 ## 安全性
 
 - 每次请求都通过 **SQLite 官方 backup API**（`mode=ro` 只读 URI + `src.backup(dst)`）取一份内存快照再查询，正确处理 WAL、不锁库、不阻塞写入方
