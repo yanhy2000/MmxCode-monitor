@@ -2,6 +2,10 @@
 
 MiniMax Code 本地用量监控台 —— 终端一条命令启动，浏览器里看 token 消耗、输出速度、缓存命中率。
 
+<p align="center">
+  <img src="img/ui.png" width="720" alt="mmx-monitor 界面预览" />
+</p>
+
 零第三方依赖（仅 Python 标准库 + 本地化的 ECharts），只读读取运行中的本地数据库，**不影响正在使用中的 MiniMax Code**。
 
 ## 功能
@@ -109,6 +113,8 @@ mmx-monitor/
 ├── static/
 │   ├── index.html       # 单页监控台
 │   └── echarts.min.js   # 本地化 ECharts（离线可用）
+├── img/
+│   └── ui.png           # 界面预览图
 ├── LICENSE
 └── README.md
 ```

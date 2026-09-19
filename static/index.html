@@ -15,7 +15,8 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);
   font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
-  padding:20px 24px 40px}
+  max-width:1280px;margin:0 auto;
+  padding:clamp(12px,2vw,20px) clamp(14px,3vw,32px) 48px}
 header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
 h1{font-size:18px;font-weight:600}
 h1 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;
@@ -32,7 +33,8 @@ select:hover,button:hover{border-color:var(--accent)}
 .ddbtn{display:flex;align-items:center;gap:7px;min-width:150px;justify-content:space-between}
 .ddbtn .cnt{color:var(--accent);font-weight:600}
 .ddbtn .caret{color:var(--muted);font-size:10px}
-.ddpanel{position:absolute;top:calc(100% + 6px);right:0;z-index:50;min-width:280px;
+.ddpanel{position:absolute;top:calc(100% + 6px);right:0;z-index:50;
+  width:min(300px,calc(100vw - 40px));
   background:var(--surface);border:1px solid var(--border);border-radius:10px;
   padding:10px;box-shadow:0 12px 32px rgba(0,0,0,.55);display:none}
 .ddpanel.open{display:block}
@@ -81,6 +83,22 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
 #toast{position:fixed;top:14px;right:14px;background:var(--surface2);
   border:1px solid var(--red);color:var(--red);border-radius:8px;padding:8px 14px;
   font-size:13px;display:none;max-width:420px;z-index:99}
+
+/* ---------- 响应式 ---------- */
+@media (max-width:720px){
+  h1{font-size:16px}
+  header{gap:8px}
+  .kpis{gap:8px;grid-template-columns:repeat(auto-fit,minmax(125px,1fr))}
+  .kpi{padding:10px 12px}
+  .kpi .value{font-size:18px}
+  .panel{padding:10px 12px;border-radius:8px}
+  #mainChart{height:260px}
+  #modelChart{height:220px}
+  .tablewrap{max-height:360px}
+  table{min-width:620px}
+  select,button{font-size:12px;padding:4px 8px}
+  #toast{left:14px;max-width:none}
+}
 </style>
 </head>
 <body>
@@ -172,6 +190,7 @@ const C={input:'#d29922',output:'#3fb950',cache:'#58a6ff'};
 const PALETTE=['#58a6ff','#bc8cff','#39c5cf','#3fb950','#d29922','#f85149',
                '#ff7b72','#a5d6ff','#7ee787','#ffa657'];
 const colorOf=i=>PALETTE[i%PALETTE.length];
+const isNarrow=()=>window.innerWidth<680;
 
 /* 模型筛选状态: null = 全部；不做持久化，每次打开都从全部模型开始 */
 let sel=null;
@@ -334,14 +353,18 @@ function renderMain(d){
     mainChart.setOption({
       backgroundColor:'transparent',
       tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-        textStyle:{color:'#e6edf3',fontSize:12}},
-      legend:{data:raw.map(x=>x.name),textStyle:{color:'#8b949e'},top:0,type:'scroll'},
-      grid:{left:78,right:24,top:34,bottom:28},
+        textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
+      legend:{data:raw.map(x=>x.name),
+        textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0,type:'scroll'},
+      grid:{left:isNarrow()?54:78,right:20,top:34,bottom:isNarrow()?22:28},
       xAxis:{type:'category',data:d.split.labels,boundaryGap:false,
-        axisLine:{lineStyle:{color:'#30363d'}},axisLabel:{color:'#8b949e'}},
-      yAxis:{type:'value',name:'输出 tokens',nameLocation:'middle',nameRotate:90,
-        nameGap:62,splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',formatter:v=>fmtK(v)},nameTextStyle:{color:'#8b949e'}},
+        axisLine:{lineStyle:{color:'#30363d'}},
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
+      yAxis:{type:'value',name:isNarrow()?'':'输出 tokens',
+        nameLocation:'middle',nameRotate:90,nameGap:56,
+        splitLine:{lineStyle:{color:'#21262d'}},
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)},
+        nameTextStyle:{color:'#8b949e'}},
       series:raw
     },true);
     return;
@@ -350,16 +373,21 @@ function renderMain(d){
   mainChart.setOption({
     backgroundColor:'transparent',
     tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-      textStyle:{color:'#e6edf3',fontSize:12}},
-    legend:{data:['缓存读取','输入','输出'],textStyle:{color:'#8b949e'},top:0},
-    grid:{left:62,right:56,top:30,bottom:28},
+      textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
+    legend:{data:['缓存读取','输入','输出'],
+      textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0},
+    grid:{left:isNarrow()?50:62,right:isNarrow()?40:56,
+      top:isNarrow()?26:30,bottom:isNarrow()?22:28},
     xAxis:{type:'category',data:s.map(x=>x.label),
-      axisLine:{lineStyle:{color:'#30363d'}},axisLabel:{color:'#8b949e'}},
+      axisLine:{lineStyle:{color:'#30363d'}},
+      axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
     yAxis:[
-      {type:'value',name:'tokens',splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',formatter:v=>fmtK(v)},nameTextStyle:{color:'#8b949e'}},
-      {type:'value',name:'tok/s',splitLine:{show:false},
-        axisLabel:{color:'#8b949e'},nameTextStyle:{color:'#8b949e'}}
+      {type:'value',name:isNarrow()?'':'tokens',
+        splitLine:{lineStyle:{color:'#21262d'}},
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)},
+        nameTextStyle:{color:'#8b949e'}},
+      {type:'value',name:isNarrow()?'':'tok/s',splitLine:{show:false},
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12},nameTextStyle:{color:'#8b949e'}}
     ],
     series:[
       {name:'缓存读取',type:'bar',stack:'t',data:s.map(x=>x.cache_read),
@@ -390,15 +418,19 @@ function renderModels(ms){
   modelChart.setOption({
     backgroundColor:'transparent',
     tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-      textStyle:{color:'#e6edf3',fontSize:12}},
-    legend:{data:['调用次数','总输入(含缓存)','输出速度'],textStyle:{color:'#8b949e'},top:0},
-    grid:{left:62,right:56,top:34,bottom:28},
+      textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
+    legend:{data:['调用次数','总输入(含缓存)','输出速度'],
+      textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0},
+    grid:{left:isNarrow()?50:62,right:isNarrow()?42:56,
+      top:34,bottom:isNarrow()?22:28},
     xAxis:{type:'category',data:ms.map(m=>m.model),
-      axisLine:{lineStyle:{color:'#30363d'}},axisLabel:{color:'#8b949e'}},
+      axisLine:{lineStyle:{color:'#30363d'}},
+      axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
     yAxis:[
       {type:'value',splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',formatter:v=>fmtK(v)}},
-      {type:'value',splitLine:{show:false},axisLabel:{color:'#8b949e'}}
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)}},
+      {type:'value',splitLine:{show:false},
+        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}}
     ],
     series:[
       {name:'调用次数',type:'bar',data:ms.map(m=>({value:m.calls,
@@ -438,9 +470,15 @@ function setTimer(){
 $('refresh').onclick=load;
 $('range').onchange=load;
 $('interval').onchange=setTimer;
+let rzT=null;
 window.addEventListener('resize',()=>{
   mainChart&&mainChart.resize();
   modelChart&&modelChart.resize();
+  // 跨过窄屏断点时重算布局（轴名称/边距/字号按 isNarrow() 切换）
+  clearTimeout(rzT);
+  rzT=setTimeout(()=>{
+    if(lastData){renderMain(lastData);renderModels(lastData);}
+  },200);
 });
 
 (function boot(){
