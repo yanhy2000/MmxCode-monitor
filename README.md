@@ -1,9 +1,9 @@
-# mmx-monitor
+# MmxCode-monitor
 
 MiniMax Code 本地用量监控台 —— 终端一条命令启动，浏览器里看 token 消耗、输出速度、缓存命中率。
 
 <p align="center">
-  <img src="img/ui.png" width="720" alt="mmx-monitor 界面预览" />
+  <img src="img/ui.png" width="720" alt="MmxCode-monitor 界面预览" />
 </p>
 
 零第三方依赖（仅 Python 标准库 + 本地化的 ECharts），只读读取运行中的本地数据库，**不影响正在使用中的 MiniMax Code**。
@@ -27,8 +27,8 @@ MiniMax Code 本地用量监控台 —— 终端一条命令启动，浏览器�
 ## 快速开始
 
 ```bash
-git clone https://github.com/yanhy2000/mmx-monitor.git
-cd mmx-monitor
+git clone https://github.com/yanhy2000/MmxCode-monitor.git
+cd MmxCode-monitor
 python monitor.py
 ```
 
@@ -108,7 +108,7 @@ $MINIMAX_DATA_DIR/v2/sqlite/runtime-state.sqlite
 ## 项目结构
 
 ```
-mmx-monitor/
+MmxCode-monitor/
 ├── monitor.py           # 终端程序入口：HTTP 服务 + 只读快照 + JSON API
 ├── static/
 │   ├── index.html       # 单页监控台

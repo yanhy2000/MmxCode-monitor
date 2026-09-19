@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mmx-monitor — MiniMax Code 本地 token 用量监控台。
+"""MmxCode-monitor — MiniMax Code 本地 token 用量监控台。
 
 零第三方依赖（仅 Python 标准库）。
 数据源: <DATA_DIR>/v2/sqlite/runtime-state.sqlite
@@ -59,7 +59,7 @@ def open_snapshot(db_path: Path) -> sqlite3.Connection:
         src.close()
         return dst
     except sqlite3.Error:
-        tmpdir = Path(tempfile.mkdtemp(prefix="mmx-monitor-"))
+        tmpdir = Path(tempfile.mkdtemp(prefix="MmxCode-monitor-"))
         try:
             base = tmpdir / "snap.db"
             shutil.copy2(db_path, base)
@@ -313,7 +313,7 @@ MIME = {".html": "text/html; charset=utf-8",
 
 class Handler(BaseHTTPRequestHandler):
     db_path: Path = None  # 类属性注入
-    server_version = "mmx-monitor/0.1"
+    server_version = "MmxCode-monitor/0.1"
 
     def log_message(self, fmt, *args):  # 安静些
         sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
@@ -405,7 +405,7 @@ def main():
     Handler.db_path = db
 
     url = f"http://{args.host}:{port}/"
-    print(f"mmx-monitor serving on {url}  (db: {db})")
+    print(f"MmxCode-monitor serving on {url}  (db: {db})")
     print("press Ctrl+C to stop")
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
