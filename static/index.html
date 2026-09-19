@@ -12,6 +12,11 @@
   --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;
   --orange:#d29922;--purple:#bc8cff;--red:#f85149;--cyan:#39c5cf;
 }
+:root[data-theme="light"]{
+  --bg:#f6f8fa;--surface:#ffffff;--surface2:#eef1f4;--border:#d0d7de;
+  --text:#1f2328;--muted:#57606a;--accent:#0969da;--green:#1a7f37;
+  --orange:#9a6700;--purple:#8250df;--red:#cf222e;--cyan:#1b7c83;
+}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);
   font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
@@ -64,7 +69,7 @@ select:hover,button:hover{border-color:var(--accent)}
 .panel h2{font-size:14px;font-weight:600;color:var(--text)}
 .toggle{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
 .toggle button{border:0;border-radius:0;background:transparent;padding:3px 10px;font-size:12px}
-.toggle button.on{background:var(--accent);color:#0d1117;font-weight:600}
+.toggle button.on{background:var(--accent);color:var(--bg);font-weight:600}
 .chart{width:100%}
 #mainChart{height:340px}
 #modelChart{height:260px}
@@ -135,6 +140,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
     <option value="30">自动 30s</option>
   </select>
   <button id="refresh">刷新</button>
+  <button id="themeBtn" title="主题: 跟随浏览器">🖥️</button>
 </header>
 
 <div id="toast"></div>
@@ -180,17 +186,42 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
 <script>
 const $=id=>document.getElementById(id);
 const fmt=n=>n==null?'—':n.toLocaleString('zh-CN');
-const fmtK=n=>{
+const fmtTok=n=>{
   if(n==null)return '—';
-  if(n>=1e8)return (n/1e8).toFixed(2)+'亿';
-  if(n>=1e4)return (n/1e4).toFixed(1)+'万';
-  return n.toLocaleString('zh-CN');
+  if(n>=1e6)return (n/1e6).toFixed(n>=1e7?1:2)+'M';
+  if(n>=1e3)return (n/1e3).toFixed(1)+'K';
+  return String(n);
 };
 const C={input:'#d29922',output:'#3fb950',cache:'#58a6ff'};
 const PALETTE=['#58a6ff','#bc8cff','#39c5cf','#3fb950','#d29922','#f85149',
                '#ff7b72','#a5d6ff','#7ee787','#ffa657'];
 const colorOf=i=>PALETTE[i%PALETTE.length];
 const isNarrow=()=>window.innerWidth<680;
+
+/* ---------- 主题: 跟随浏览器配色, 默认暗色; 按钮可临时切换, 不持久化 ---------- */
+const THEME={
+  dark:{axis:'#30363d',label:'#8b949e',split:'#21262d',
+        tipBg:'#1c2129',tipBorder:'#30363d',tipText:'#e6edf3'},
+  light:{axis:'#d0d7de',label:'#57606a',split:'#e8ecf0',
+         tipBg:'#ffffff',tipBorder:'#d0d7de',tipText:'#1f2328'},
+};
+const T=()=>THEME[document.documentElement.dataset.theme==='light'?'light':'dark'];
+let themeMode='auto'; // auto | light | dark
+const mqLight=window.matchMedia('(prefers-color-scheme: light)');
+const THEME_ICON={auto:'🖥️',light:'☀️',dark:'🌙'};
+const THEME_NAME={auto:'跟随浏览器',light:'亮色',dark:'暗色'};
+function applyTheme(){
+  const effective=themeMode==='auto'?(mqLight.matches?'light':'dark'):themeMode;
+  document.documentElement.dataset.theme=effective;
+  $('themeBtn').textContent=THEME_ICON[themeMode];
+  $('themeBtn').title='主题: '+THEME_NAME[themeMode]+'（点击切换）';
+  if(lastData&&window.echarts){renderMain(lastData);renderModels(lastData.models);}
+}
+$('themeBtn').onclick=()=>{
+  themeMode=themeMode==='auto'?'light':(themeMode==='light'?'dark':'auto');
+  applyTheme();
+};
+mqLight.addEventListener('change',()=>{if(themeMode==='auto')applyTheme();});
 
 /* 模型筛选状态: null = 全部；不做持久化，每次打开都从全部模型开始 */
 let sel=null;
@@ -223,7 +254,7 @@ function renderDd(avail){
       <input type="checkbox" data-model="${m.model}" ${(!sel||sel.includes(m.model))?'checked':''}>
       <span class="swatch" style="background:${colorOf(i)}"></span>
       <span class="mname">${m.model}</span>
-      <span class="mmeta">${fmt(m.calls)} 次 · ${fmtK(m.output)} out</span>
+      <span class="mmeta">${fmt(m.calls)} 次 · ${fmtTok(m.output)} out</span>
     </label>`).join('') || '<div class="sub" style="padding:8px">当前范围无模型数据</div>';
 
   list.querySelectorAll('input[data-model]').forEach(cb=>{
@@ -311,13 +342,14 @@ function render(d){
   $('recentInfo').textContent=o.calls?`筛选后 ${fmt(o.calls)} 次调用中的最近 ${d.recent.length} 条`:'';
 
   const cards=[
-    ['输入 tokens',fmtK(o.input_tokens),'新计入 prompt 的部分'],
-    ['输出 tokens',fmtK(o.output_tokens),`累计生成 ${o.sum_dur_s}s`],
-    ['缓存读取',fmtK(o.cache_read_tokens),'服务端命中的缓存'],
+    ['Token 消耗',fmtTok(o.total_tokens),
+     `输入 ${fmtTok(o.input_tokens)} · 缓存 ${fmtTok(o.cache_read_tokens)} · 输出 ${fmtTok(o.output_tokens)}`],
+    ['输入 tokens',fmtTok(o.input_tokens),'新计入 prompt 的部分'],
+    ['输出 tokens',fmtTok(o.output_tokens),`累计生成 ${o.sum_dur_s}s`],
+    ['缓存读取',fmtTok(o.cache_read_tokens),'服务端命中的缓存'],
     ['缓存命中率',o.hit_rate_pct+'%','cache_read / (cache_read+input)'],
     ['调用次数',fmt(o.calls),scope],
     ['输出速度',o.avg_tok_s+' tok/s','Σoutput / Σduration 加权'],
-    ['会话数',fmt(o.sessions),'有用量记录的会话'],
   ];
   $('kpis').innerHTML=cards.map(c=>
     `<div class="kpi"><div class="label">${c[0]}</div>
@@ -352,19 +384,19 @@ function renderMain(d){
     // 只在选中单个模型且该模型无数据时兜底
     mainChart.setOption({
       backgroundColor:'transparent',
-      tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-        textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
+      tooltip:{trigger:'axis',backgroundColor:T().tipBg,borderColor:T().tipBorder,
+        textStyle:{color:T().tipText,fontSize:isNarrow()?11:12},confine:true},
       legend:{data:raw.map(x=>x.name),
-        textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0,type:'scroll'},
+        textStyle:{color:T().label,fontSize:isNarrow()?11:12},top:0,type:'scroll'},
       grid:{left:isNarrow()?54:78,right:20,top:34,bottom:isNarrow()?22:28},
       xAxis:{type:'category',data:d.split.labels,boundaryGap:false,
-        axisLine:{lineStyle:{color:'#30363d'}},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
+        axisLine:{lineStyle:{color:T().axis}},
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12}},
       yAxis:{type:'value',name:isNarrow()?'':'输出 tokens',
         nameLocation:'middle',nameRotate:90,nameGap:56,
-        splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)},
-        nameTextStyle:{color:'#8b949e'}},
+        splitLine:{lineStyle:{color:T().split}},
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12,formatter:v=>fmtTok(v)},
+        nameTextStyle:{color:T().label}},
       series:raw
     },true);
     return;
@@ -372,29 +404,29 @@ function renderMain(d){
 
   mainChart.setOption({
     backgroundColor:'transparent',
-    tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-      textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
+    tooltip:{trigger:'axis',backgroundColor:T().tipBg,borderColor:T().tipBorder,
+      textStyle:{color:T().tipText,fontSize:isNarrow()?11:12},confine:true},
     legend:{data:['缓存读取','输入','输出'],
-      textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0},
+      textStyle:{color:T().label,fontSize:isNarrow()?11:12},top:0},
     grid:{left:isNarrow()?50:62,right:isNarrow()?40:56,
       top:isNarrow()?26:30,bottom:isNarrow()?22:28},
     xAxis:{type:'category',data:s.map(x=>x.label),
-      axisLine:{lineStyle:{color:'#30363d'}},
-      axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
+      axisLine:{lineStyle:{color:T().axis}},
+      axisLabel:{color:T().label,fontSize:isNarrow()?10:12}},
     yAxis:[
       {type:'value',name:isNarrow()?'':'tokens',
-        splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)},
-        nameTextStyle:{color:'#8b949e'}},
+        splitLine:{lineStyle:{color:T().split}},
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12,formatter:v=>fmtTok(v)},
+        nameTextStyle:{color:T().label}},
       {type:'value',name:isNarrow()?'':'tok/s',splitLine:{show:false},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12},nameTextStyle:{color:'#8b949e'}}
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12},nameTextStyle:{color:T().label}}
     ],
     series:[
       {name:'缓存读取',type:'bar',stack:'t',data:s.map(x=>x.cache_read),
         itemStyle:{color:C.cache},barMaxWidth:26},
       {name:'输入',type:'bar',stack:'t',data:s.map(x=>x.input),
         itemStyle:{color:C.input},barMaxWidth:26},
-      {name:'输出',type:'line',yAxisIndex:1,data:s.map(x=>x.output),
+      {name:'输出',type:'line',yAxisIndex:1,data:s.map(x=>x.output),smooth:true,
         itemStyle:{color:C.output},lineStyle:{color:C.output},symbol:'none'},
     ]
   },true);
@@ -405,7 +437,7 @@ function renderModels(ms){
   if(!modelChart){
     modelChart=echarts.init($('modelChart'));
     modelChart.on('click',p=>{
-      if(p.componentType!=='series'||p.seriesName==='输出速度')return;
+      if(p.seriesType!=='bar')return;   // 只有柱子触发筛选
       const m=p.name;
       if(sel&&sel.length===1&&sel[0]===m)sel=null;   // 再点一次取消
       else sel=[m];                                   // 只看这一个
@@ -417,29 +449,33 @@ function renderModels(ms){
   (lastData?lastData.available_models:[]).forEach((m,i)=>nameIdx[m.model]=i);
   modelChart.setOption({
     backgroundColor:'transparent',
-    tooltip:{trigger:'axis',backgroundColor:'#1c2129',borderColor:'#30363d',
-      textStyle:{color:'#e6edf3',fontSize:isNarrow()?11:12},confine:true},
-    legend:{data:['调用次数','总输入(含缓存)','输出速度'],
-      textStyle:{color:'#8b949e',fontSize:isNarrow()?11:12},top:0},
+    tooltip:{trigger:'axis',backgroundColor:T().tipBg,borderColor:T().tipBorder,
+      textStyle:{color:T().tipText,fontSize:isNarrow()?11:12},confine:true},
+    legend:{data:['总输入(含缓存)','调用次数','输出速度'],
+      textStyle:{color:T().label,fontSize:isNarrow()?11:12},top:0},
     grid:{left:isNarrow()?50:62,right:isNarrow()?42:56,
       top:34,bottom:isNarrow()?22:28},
     xAxis:{type:'category',data:ms.map(m=>m.model),
-      axisLine:{lineStyle:{color:'#30363d'}},
-      axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}},
+      axisLine:{lineStyle:{color:T().axis}},
+      axisLabel:{color:T().label,fontSize:isNarrow()?10:12}},
     yAxis:[
-      {type:'value',splitLine:{lineStyle:{color:'#21262d'}},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12,formatter:v=>fmtK(v)}},
-      {type:'value',splitLine:{show:false},
-        axisLabel:{color:'#8b949e',fontSize:isNarrow()?10:12}}
+      {type:'value',name:isNarrow()?'':'tokens',
+        splitLine:{lineStyle:{color:T().split}},
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12,formatter:v=>fmtTok(v)},
+        nameTextStyle:{color:T().label}},
+      {type:'value',name:isNarrow()?'':'次数 / tok/s',splitLine:{show:false},
+        axisLabel:{color:T().label,fontSize:isNarrow()?10:12},
+        nameTextStyle:{color:T().label}}
     ],
     series:[
-      {name:'调用次数',type:'bar',data:ms.map(m=>({value:m.calls,
-        itemStyle:{color:colorOf(nameIdx[m.model]||0)}})),barMaxWidth:40},
       {name:'总输入(含缓存)',type:'bar',
         data:ms.map(m=>({value:m.cache_read+m.input,
-        itemStyle:{color:colorOf(nameIdx[m.model]||0),opacity:.45}})),barMaxWidth:40},
-      {name:'输出速度',type:'line',yAxisIndex:1,data:ms.map(m=>m.tok_s),
-        itemStyle:{color:C.output},lineStyle:{color:C.output},
+        itemStyle:{color:colorOf(nameIdx[m.model]||0)}})),barMaxWidth:44},
+      {name:'调用次数',type:'line',yAxisIndex:1,data:ms.map(m=>m.calls),
+        smooth:true,symbol:'circle',symbolSize:6,
+        itemStyle:{color:C.cyan},lineStyle:{color:C.cyan,width:1.8}},
+      {name:'输出速度',type:'line',yAxisIndex:1,data:ms.map(m=>m.tok_s),smooth:true,
+        itemStyle:{color:C.output},lineStyle:{color:C.output,width:1.8},
         symbol:'circle',symbolSize:7},
     ]
   },true);
@@ -477,11 +513,12 @@ window.addEventListener('resize',()=>{
   // 跨过窄屏断点时重算布局（轴名称/边距/字号按 isNarrow() 切换）
   clearTimeout(rzT);
   rzT=setTimeout(()=>{
-    if(lastData){renderMain(lastData);renderModels(lastData);}
+    if(lastData){renderMain(lastData);renderModels(lastData.models);}
   },200);
 });
 
 (function boot(){
+  applyTheme();
   if(window.echarts)load();
   else setTimeout(boot,300);
 })();

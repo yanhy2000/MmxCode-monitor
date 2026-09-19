@@ -289,6 +289,7 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
             "input_tokens": sum_in,
             "output_tokens": sum_out,
             "cache_read_tokens": sum_cr,
+            "total_tokens": sum_in + sum_cr + sum_out,
             "hit_rate_pct": round(hit_rate, 2),
             "avg_tok_s": round(tok_s, 1),
             "sum_dur_s": round(sum_dur / 1000, 1),
