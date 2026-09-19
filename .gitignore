@@ -1,0 +1,15 @@
+# 数据库只读快照遗留物
+analysis/
+runtime-state*.db
+runtime-state*.db-wal
+runtime-state*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 日志与临时文件
+*.log
+*.tmp
