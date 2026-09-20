@@ -1,5 +1,7 @@
 ﻿# mcode-monitor
 
+> 官方 Mini App 仓库已收录，可前往官方社区下载正式版：[MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps)。本仓库是开发主版本，有更新会同步提交到官方。
+
 MiniMax Code 本地用量监控面板（Mini App 版）。装进 MiniMax Code 后随时打开，看 token 消耗、输出速度、缓存命中率和各模型的用量分布。
 
 <p align="center">
