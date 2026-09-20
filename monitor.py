@@ -77,7 +77,7 @@ def open_snapshot(db_path: Path) -> sqlite3.Connection:
 
 # 快照结果缓存: 避免并发请求重复 backup
 _cache_lock = threading.Lock()
-_cache = {"at": 0.0, "rows": None, "ledger": None, "error": None}
+_cache = {"at": 0.0, "rows": None, "ledger": None, "dropped": 0, "error": None}
 _CACHE_TTL = 2.0
 
 
@@ -90,12 +90,34 @@ SELECT m.created_at_ms AS ts,
        json_extract(m.data_json,'$.usage.output_tokens')   AS outp,
        json_extract(m.data_json,'$.usage.cache_read')      AS cr,
        json_extract(m.data_json,'$.usage.request_duration_ms') AS dur,
-       s.title AS session_title
+       s.title AS session_title,
+       m.msg_id
 FROM local_runtime_message_rows m
 LEFT JOIN local_runtime_sessions s ON s.session_id = m.session_id
 WHERE json_extract(m.data_json,'$.usage') IS NOT NULL
-ORDER BY m.created_at_ms
+ORDER BY m.created_at_ms, m.id
 """
+
+
+def dedup_by_msg_id(rows):
+    """按 msg_id 跨会话去重（保留最早一条），返回 (去重后的行, 丢弃行数)。
+
+    会话迁移/派生会把历史消息整段复制进新会话（msg_id 相同、usage 逐字段一致），
+    官方账本 local_runtime_token_usage 对这类副本只计一次；
+    不去重的话本工具会把同一批调用的 token 重复统计。
+    """
+    seen = set()
+    out = []
+    dropped = 0
+    for r in rows:  # MSG_SQL 已按 created_at_ms, id 升序
+        mid = r[-1]
+        if mid is None or mid not in seen:
+            if mid is not None:
+                seen.add(mid)
+            out.append(r)
+        else:
+            dropped += 1
+    return out, dropped
 
 LEDGER_SQL = """
 SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(reasoning_tokens),
@@ -106,17 +128,17 @@ FROM local_runtime_token_usage
 
 
 def fetch_all(db_path: Path):
-    """读取并缓存快照，返回 (message_rows, ledger)。"""
+    """读取并缓存快照，返回 (message_rows, ledger, dedup_dropped)。"""
     with _cache_lock:
         now = time.time()
         if _cache["rows"] is not None and now - _cache["at"] < _CACHE_TTL:
             if _cache["error"]:
                 raise RuntimeError(_cache["error"])
-            return _cache["rows"], _cache["ledger"]
+            return _cache["rows"], _cache["ledger"], _cache["dropped"]
     try:
         con = open_snapshot(db_path)
         try:
-            rows = con.execute(MSG_SQL).fetchall()
+            rows, dropped = dedup_by_msg_id(con.execute(MSG_SQL).fetchall())
             try:
                 ledger = con.execute(LEDGER_SQL).fetchone()
             except sqlite3.Error:
@@ -125,11 +147,11 @@ def fetch_all(db_path: Path):
             con.close()
     except Exception as e:
         with _cache_lock:
-            _cache.update(at=now, rows=None, ledger=None, error=str(e))
+            _cache.update(at=now, rows=None, ledger=None, dropped=0, error=str(e))
         raise
     with _cache_lock:
-        _cache.update(at=now, rows=rows, ledger=ledger, error=None)
-    return rows, ledger
+        _cache.update(at=now, rows=rows, ledger=ledger, dropped=dropped, error=None)
+    return rows, ledger, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +181,7 @@ def fmt_bucket_label(ts_ms: int, step_ms: int) -> str:
 
 
 def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
-    rows_all, ledger = fetch_all(db_path)
+    rows_all, ledger, dedup_dropped = fetch_all(db_path)
     now_ms = int(time.time() * 1000)
     span = RANGE_MS.get(range_key)
     if span is not None:
@@ -283,6 +305,7 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         "range": range_key,
         "available_models": available_models,
         "selected_models": sorted(models_filter) if models_filter else [],
+        "dedup_dropped": dedup_dropped,
         "overview": {
             "calls": n,
             "sessions": len(sessions),
@@ -386,8 +409,9 @@ def main():
 
     # 启动自检: 确认快照可读
     try:
-        rows, ledger = fetch_all(db)
+        rows, ledger, dropped = fetch_all(db)
         print(f"[ok] snapshot readable: {len(rows)} usage rows, "
+              f"dedup dropped {dropped}, "
               f"ledger rows={ledger[0] if ledger else 'n/a'}")
     except Exception as e:
         print(f"[warn] first snapshot failed (service will keep retrying): {e}")
