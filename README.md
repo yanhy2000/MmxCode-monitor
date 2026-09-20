@@ -6,7 +6,7 @@ MiniMax Code 本地用量监控台 —— 终端一条命令启动，浏览器�
   <img src="img/ui.png" width="720" alt="MmxCode-monitor 界面预览" />
 </p>
 
-零第三方依赖（仅 Python 标准库 + 本地化的 ECharts），只读读取运行中的本地数据库，**不影响正在使用中的 MiniMax Code**。
+无第三方依赖（仅 Python 标准库 + 本地化的 ECharts），只读访问运行中的本地数据库，不影响正在使用的 MiniMax Code。
 
 ## 功能
 
@@ -95,70 +95,20 @@ $MINIMAX_DATA_DIR/v2/sqlite/runtime-state.sqlite
 | 指标 | 计算方式 |
 | --- | --- |
 | Token 消耗 | `input_tokens + cache_read + output_tokens`（M/K 单位展示） |
+| 去重 | 同一 `msg_id` 只计最早一条（迁移产生的跨会话副本不重复计） |
 | 缓存命中率 | `cache_read / (cache_read + input_tokens)` |
 | 输出速度 | `Σ output_tokens / Σ request_duration_ms × 1000`（请求级加权平均） |
 | 单次速度 | `output_tokens / request_duration_ms × 1000` |
 
-**关于缓存命中率的数据来源**：`usage.cache_read` 是**服务端下发**的权威值，客户端也会用本地 tokenizer 估算一份（`context_usage_telemetry.localTokens`），两者存在约 3~4% 的稳定偏差，对应字段 `context_usage_telemetry.divergenceRate`。本工具一律采用服务端数值，客户端估算仅作为一致性参考。
-
-### 为什么是三项相加（而不是像 GLM 那样两项相加）
-
-不同厂商 API 对"输入 token"的定义不同，直接照抄公式会算错：
-
-| 语义 | 代表 | 官方 total 公式 | `input_tokens` 是否含缓存 |
-| --- | --- | --- | --- |
-| Anthropic 系 | **MiniMax** | `input + cache_read + output` | ❌ 不含（缓存是**并存字段**） |
-| OpenAI 系 | GLM / DeepSeek | `input + output` | ✅ 含（缓存是 input 的**子集**） |
-
-两者表达的其实是同一个量——**全部输入（含缓存）+ 输出**，只是加法位置不同。
-
-本工具采用 MiniMax 的 Anthropic 系公式，并已在本地库中逐行验证与官方字段一致：
-
-- `local_runtime_token_usage.raw` 的 `totalTokens` = `input + output + cacheRead` → **578/578 行吻合**
-- `local_runtime_message_rows.data_json` 的 `usage.total_tokens` = 同式 → **613/615 行吻合**（另 2 行字段为 NULL）
-
-⚠️ 若改成 `input + output`，在 MiniMax 数据上会**少算约 98%**（缓存占输入总量 96%+）；反之若把本公式套到 GLM 数据上，则会**重复计算缓存**导致虚高。
+**关于缓存命中率的数据来源**：`usage.cache_read` 是服务端下发的权威值，客户端也会用本地 tokenizer 估算一份（`context_usage_telemetry.localTokens`），两者存在约 3~4% 的稳定偏差，对应字段 `context_usage_telemetry.divergenceRate`。本工具一律采用服务端数值，客户端估算仅作为一致性参考。
 
 ### 与产品内「用量」页面的差异
 
-MiniMax Code 产品内的用量页（设置 → 用量）与本工具统计的是**同一份用量**。经过两天的跟踪，此前记录的差异已经可以拆成三部分（以下均为 **MiniMax-M3 单模型口径**）：
+产品内的用量页（设置 → 用量）和本工具统计的是同一批调用，但数字对不齐。以下均为 MiniMax-M3 单模型口径。
 
-**① 服务端统计延迟 —— 已确认**
+一是服务端统计有延迟，二是本地库有重复副本。会话迁移或派生时，历史消息会整份复制进新会话，两份行的 `msg_id` 和 usage 完全相同。本工具按 `msg_id` 跨会话去重、保留最早一条，与官方账本表 `local_runtime_token_usage` 的计数一致；API 返回的 `dedup_dropped` 字段即去掉的行数。
 
-| 观测时间 | 产品内用量 | 本工具原始求和 | 差距 |
-| --- | --- | --- | --- |
-| 09-19 晚 | 15.97M | 39.38M | 23.41M（−59%） |
-| 09-20 上午 | 38.82M | 39.38M | 0.56M（−1.4%） |
-
-本地 M3 数据自 09-20 00:01 后没有新增调用，数字保持在 39.38M；产品内在约 12 小时内从 15.97M 追到 38.82M。**服务端统计存在延迟（最终一致性），并会随时间补齐**，这一点得到验证。
-
-已排除的原因（两天数据共同支持）：模型拆分、会话拆分、主/子 Agent 拆分、按小时切分。
-
-**② 本地重复副本 —— 已定位（本工具会多算）**
-
-本地库里有两个会话（`mvs_0f4e49…`、`mvs_574780…`）各存了一份 **msg_id 完全相同**的行：前者 22:04 创建并产生前两个 turn 的 29 次调用（22:04–22:07），后者 22:07:49 创建时把这批历史原样带入，两份行的 usage 逐字段一致，合计 **1,033,520 token**。
-
-应用自身的账本表 `local_runtime_token_usage` 对这份重复只计一次（这 29 条在 `mvs_574780…` 下 0 行，只在 `mvs_0f4e49…` 下计一次）。因此本工具的 M3 有两个口径：
-
-- 原始求和：**39.38M**
-- 按 `msg_id` 跨会话去重（与账本一致）：**38.35M**
-
-复核 SQL：
-
-```sql
-SELECT COUNT(*) FROM (
-  SELECT msg_id FROM local_runtime_message_rows
-  WHERE json_extract(data_json, '$.usage') IS NOT NULL
-  GROUP BY msg_id HAVING COUNT(DISTINCT session_id) > 1);
-```
-
-**③ 残余差异 —— 待观察**
-
-产品内 38.82M 落在两个口径之间：比去重值（38.35M）高约 0.47M（1.2%），比原始求和（39.38M）低约 0.56M（1.4%）。尚未定位，候选：服务端延迟的残余、账号在其他入口/设备产生的用量，或产品内另有口径细节。
-
-另外，09-19 产品内显示的**缓存命中 98.5%** 在本地数据中未找到对应口径（聚合 95.92%、逐调用平均 94.77%、逐调用中位数 99.32%，均不等于 98.5%），一并留待后续核对。
-
-> 结论以产品内展示为准（官方文档明确"具体计费和额度规则以产品内展示为准"）。本工具读取的是本地运行时库，属于近实时观测，适合看趋势和分布，不适合作为计费依据。
+计费和额度以产品内展示为准；本工具读的是本地运行时库，适合看实时趋势和分布，不适合作为计费依据。
 
 ## 安全性
 
