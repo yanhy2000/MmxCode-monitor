@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "name": "mmx-usage-monitor",
+  "displayName": "mmx-usage-monitor",
+  "version": "1.0.0",
+  "description": "mmx-usage-monitor Mini App",
+  "author": "User",
+  "icon": "icon.png",
+  "category": "Other",
+  "exampleQueries": [],
+  "apps": [],
+  "mcpServers": [],
+  "skills": []
+}
