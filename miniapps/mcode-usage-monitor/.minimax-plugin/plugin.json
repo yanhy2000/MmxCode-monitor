@@ -6,8 +6,11 @@
   "description": "统计本机 MiniMax Code 会话的 token 消耗，可按模型和会话筛选。",
   "author": "yanhy2000",
   "icon": "icon.png",
-  "category": "Other",
-  "exampleQueries": [],
+  "category": "Business",
+  "exampleQueries": [
+    "打开 Token 用量看板",
+    "看看 MiniMax Code 最近 24 小时的 token 用量"
+  ],
   "apps": [],
   "mcpServers": [],
   "skills": []
