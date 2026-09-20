@@ -103,6 +103,8 @@ tr:hover td{background:var(--mcode-bg-secondary)}
   border:1px solid var(--mcode-border);white-space:nowrap}
 .tablewrap{max-height:420px;overflow:auto}
 footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top:8px}
+footer a{color:var(--mcode-accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
 #toast{position:fixed;top:14px;right:14px;background:var(--mcode-bg-secondary);
   border:1px solid var(--mcode-danger);color:var(--mcode-danger);border-radius:8px;
   padding:8px 14px;font-size:13px;display:none;max-width:420px;z-index:99}
@@ -229,7 +231,7 @@ footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top
   </div>
 </section>
 
-<footer>只读本地数据库，不影响运行中的 MiniMax Code</footer>
+<footer>只读本地数据库，不影响运行中的 MiniMax Code<br>建议与反馈请到 <a href="https://github.com/yanhy2000/mCode-monitor" target="_blank" rel="noreferrer">GitHub 仓库</a></footer>
 </div>
 
 <script>
@@ -268,13 +270,33 @@ function applyTheme(){
 $('themeBtn').onclick=()=>{
   themeMode=themeMode==='auto'?'light':(themeMode==='light'?'dark':'auto');
   applyTheme();
+  savePrefs();
 };
 mqLight.addEventListener('change',()=>{if(themeMode==='auto')applyTheme();});
 
-/* 模型筛选状态: null = 全部；不做持久化，每次打开都从全部模型开始 */
+/* 模型筛选状态: null = 全部 */
 let sel=null;
 /* 会话筛选状态: null = 全部 */
 let selSess=null;
+
+/* ---------- 偏好持久化: 存到插件数据目录(经 Node 中转) ---------- */
+async function loadPrefs(){
+  try{
+    const r=await fetch('/api/prefs',{cache:'no-store'});
+    return await r.json();
+  }catch{return{}}
+}
+let saveT=null;
+function savePrefs(){
+  clearTimeout(saveT);
+  saveT=setTimeout(()=>{
+    try{
+      fetch('/api/prefs',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({models:sel||[],sessions:selSess||[],
+          range:$('range').value,interval:+$('interval').value,theme:themeMode})});
+    }catch{/* 保存失败不影响使用 */}
+  },400);
+}
 
 let splitMode=false;
 let mainChart=null,modelChart=null,timer=null,lastData=null;
@@ -329,7 +351,7 @@ function renderDd(avail){
         sel=null;
         list.querySelectorAll('input[data-model]').forEach(x=>x.checked=true);
       }
-      updateDdLabel();load();
+      updateDdLabel();savePrefs();load();
     };
   });
   updateDdLabel();
@@ -352,7 +374,7 @@ function ddSet(mode){
     sel=inv.length?inv:null;
   }
   renderDd(lastData.available_models);
-  load();
+  savePrefs();load();
 }
 
 /* ---------- 会话多选下拉 ---------- */
@@ -386,7 +408,7 @@ function renderSd(avail){
         selSess=null;
         list.querySelectorAll('input[data-sess]').forEach(x=>x.checked=true);
       }
-      updateSdLabel();load();
+      updateSdLabel();savePrefs();load();
     };
   });
   list.scrollTop=keepTop; // 自动刷新重建时保留滚动位置
@@ -413,7 +435,7 @@ function sdSet(mode){
     selSess=inv.length?inv:null;
   }
   renderSd(sessList());
-  load();
+  savePrefs();load();
 }
 
 function bindDd(btnId,panelId){
@@ -662,8 +684,8 @@ function setTimer(){
 }
 
 $('refresh').onclick=load;
-$('range').onchange=load;
-$('interval').onchange=setTimer;
+$('range').onchange=()=>{savePrefs();load();};
+$('interval').onchange=()=>{savePrefs();setTimer();};
 let rzT=null;
 window.addEventListener('resize',()=>{
   mainChart&&mainChart.resize();
@@ -676,11 +698,23 @@ window.addEventListener('resize',()=>{
 });
 
 (function boot(){
-  applyTheme();
-  setTimer(); // 启动即开始按所选间隔自动刷新
-  if(window.echarts)load();
-  else setTimeout(boot,300);
+  applyTheme(); // 先用系统主题渲染，避免闪白/闪黑
+  loadPrefs().then(p=>{
+    if(Array.isArray(p.models))sel=p.models.length?p.models:null;
+    if(Array.isArray(p.sessions))selSess=p.sessions.length?p.sessions:null;
+    if(p.range&&[...$('range').options].some(o=>o.value===p.range))$('range').value=p.range;
+    if(p.interval!=null&&[...$('interval').options].some(o=>+o.value===p.interval))$('interval').value=String(p.interval);
+    if(p.theme)themeMode=p.theme;
+    applyTheme();
+    setTimer(); // 启动即开始按所选间隔自动刷新
+    startLoad();
+  });
 })();
+
+function startLoad(){
+  if(window.echarts)load();
+  else setTimeout(startLoad,300);
+}
 </script>
 </body>
 </html>

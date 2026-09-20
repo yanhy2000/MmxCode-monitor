@@ -1,7 +1,7 @@
 // @ts-check
 
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 
@@ -27,9 +27,62 @@ const RANGE_KEYS = ['1h', '24h', '7d', '30d', 'all'];
 export async function start(context) {
   const clientRoot = join(context.pluginRoot, 'miniapp/client');
   const apiPyPath = join(context.pluginRoot, 'miniapp/node/api.py');
+  const prefsPath = join(context.dataDir, 'prefs.json');
 
   const indexHtml = await readFile(join(clientRoot, 'index.html'));
   const echartsJs = await readFile(join(clientRoot, 'echarts.min.js'));
+
+  // ---- 偏好持久化(存到 Host 分配的插件数据目录) ----
+  const PREF_RANGES = RANGE_KEYS;
+  const PREF_INTERVALS = [0, 5, 10, 30];
+  const PREF_THEMES = ['auto', 'light', 'dark'];
+
+  function sanitizePrefs(input) {
+    const out = {};
+    if (!input || typeof input !== 'object') return out;
+    if (Array.isArray(input.models)) {
+      out.models = input.models.filter((x) => typeof x === 'string').slice(0, 50);
+    }
+    if (Array.isArray(input.sessions)) {
+      out.sessions = input.sessions.filter((x) => typeof x === 'string').slice(0, 50);
+    }
+    if (PREF_RANGES.includes(input.range)) out.range = input.range;
+    if (PREF_INTERVALS.includes(input.interval)) out.interval = input.interval;
+    if (PREF_THEMES.includes(input.theme)) out.theme = input.theme;
+    return out;
+  }
+
+  async function readPrefs() {
+    try {
+      const raw = await readFile(prefsPath, 'utf8');
+      const obj = JSON.parse(raw);
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function mergePrefs(patch) {
+    const next = { ...(await readPrefs()), ...sanitizePrefs(patch) };
+    await mkdir(context.dataDir, { recursive: true });
+    await writeFile(prefsPath, JSON.stringify(next), 'utf8');
+    return next;
+  }
+
+  function readBody(req, limit = 8192) {
+    return new Promise((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > limit) {
+          reject(new Error('body too large'));
+          req.destroy();
+        }
+      });
+      req.on('end', () => resolve(data));
+      req.on('error', reject);
+    });
+  }
 
   // ---- Python 查询子进程 ----
   const activeChildren = new Set();
@@ -128,6 +181,19 @@ export async function start(context) {
         'cache-control': 'no-store',
       });
       res.end(echartsJs);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/prefs') {
+      readPrefs()
+        .then((prefs) => sendJson(res, 200, prefs))
+        .catch((err) => sendJson(res, 500, { error: err.message }));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/prefs') {
+      readBody(req)
+        .then((text) => mergePrefs(JSON.parse(text || '{}')))
+        .then((prefs) => sendJson(res, 200, prefs))
+        .catch((err) => sendJson(res, 400, { error: err.message }));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/data') {
