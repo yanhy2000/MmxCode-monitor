@@ -31,7 +31,7 @@ MiniMax Code 本地用量监控面板（Mini App 版）。装进 MiniMax Code �
 | Windows | `C:\Users\<用户名>\.minimax\plugins\mcode-usage-monitor` |
 | macOS / Linux | `~/.minimax/plugins/mcode-usage-monitor` |
 
-然后从 MiniMax Code 的 Mini App 入口打开「mcode Token 用量看板」即可。
+然后从 MiniMax Code 的 Mini App 入口打开「Token 用量看板」即可。
 
 关闭页面不影响使用，随时从同一入口再次打开；想卸载，删掉上面那个文件夹就行。
 
