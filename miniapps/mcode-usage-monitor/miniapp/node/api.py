@@ -12,6 +12,7 @@
 """
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -135,7 +136,36 @@ def fmt_bucket_label(ts_ms: int, step_ms: int) -> str:
     return time.strftime("%Y-%m-%d", lt)
 
 
-def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
+def discover_session_files(db_path: Path) -> dict:
+    """扫描 <data root>/v2/sessions 下真实存在的会话文件。
+
+    只有目录里带 messages.jsonl 的才算真正的会话文件；目录名形如
+    01-26-32-226-session_<base64(session_id)>，由此还原会话 id。
+    返回 {session_id: {"mtime": ms, "size": bytes}}。
+    """
+    root = db_path.parent.parent / "sessions"
+    found = {}
+    if not root.is_dir():
+        return found
+    for f in root.rglob("messages.jsonl"):
+        name = f.parent.name
+        if "-session_" not in name:
+            continue
+        b64 = name.split("-session_", 1)[1]
+        try:
+            sid = base64.b64decode(b64 + "=" * (-len(b64) % 4)).decode("utf-8")
+        except Exception:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        found[sid] = {"mtime": int(st.st_mtime * 1000), "size": st.st_size}
+    return found
+
+
+def build_payload(db_path: Path, range_key: str, models_filter=None,
+                  sessions_filter=None) -> dict:
     rows_all, ledger, dedup_dropped = fetch_all(db_path)
     now_ms = int(time.time() * 1000)
     span = RANGE_MS.get(range_key)
@@ -151,10 +181,46 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         m["output"] += r[5] or 0
     available_models = sorted(avail.values(), key=lambda x: -x["output"])
 
+    # 会话清单以磁盘上的真实会话文件为准（与产品内展示口径一致）
+    stats = {}
+    for r in rows_all:
+        d = stats.setdefault(r[2], {"title": r[8] or "", "calls": 0, "tokens": 0, "last_ts": r[0]})
+        d["calls"] += 1
+        d["tokens"] += (r[4] or 0) + (r[5] or 0) + (r[6] or 0)
+        d["last_ts"] = max(d["last_ts"], r[0])
+
+    files = discover_session_files(db_path)
+    available_sessions = []
+    if files:
+        session_source = "files"
+        for sid, meta in files.items():
+            st = stats.get(sid)
+            available_sessions.append({
+                "session_id": sid,
+                "title": (st["title"] if st and st["title"] else sid),
+                "calls": st["calls"] if st else 0,
+                "tokens": st["tokens"] if st else 0,
+                "last_ts": st["last_ts"] if st else 0,
+                "file_mtime": meta["mtime"],
+            })
+        available_sessions.sort(key=lambda x: -x["file_mtime"])
+    else:  # 兜底：一个会话文件都没有时，退回按库内会话列举
+        session_source = "db"
+        for sid, st in stats.items():
+            available_sessions.append({
+                "session_id": sid,
+                "title": st["title"] or sid,
+                "calls": st["calls"], "tokens": st["tokens"], "last_ts": st["last_ts"],
+            })
+        available_sessions.sort(key=lambda x: -x["last_ts"])
+
     rows = rows_all
     if models_filter:
         wanted = set(models_filter)
-        rows = [r for r in rows_all if (r[1] or "unknown") in wanted]
+        rows = [r for r in rows if (r[1] or "unknown") in wanted]
+    if sessions_filter:
+        wanted_s = set(sessions_filter)
+        rows = [r for r in rows if r[2] in wanted_s]
 
     n = len(rows)
     sum_in = sum((r[4] or 0) for r in rows)
@@ -269,6 +335,10 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         "series": series,
         "split": split,
         "models": model_list,
+        "available_sessions": available_sessions,
+        "selected_sessions": sorted(sessions_filter) if sessions_filter else [],
+        "session_files": len(available_sessions),
+        "session_source": session_source,
         "recent": recent,
         "ledger": ledger_obj,
     }
@@ -279,6 +349,7 @@ def main():
     ap.add_argument("--range", default="all", dest="range_key",
                     help="all | 1h | 24h | 7d | 30d")
     ap.add_argument("--models", default="", help="逗号分隔的模型列表, 留空为全部")
+    ap.add_argument("--sessions", default="", help="逗号分隔的会话 id 列表, 留空为全部")
     ap.add_argument("--db", default=str(default_db_path()))
     args = ap.parse_args()
 
@@ -288,12 +359,13 @@ def main():
 
     rng = args.range_key if args.range_key in RANGE_MS else "all"
     models = [p.strip() for p in args.models.split(",") if p.strip()] or None
+    sessions = [p.strip() for p in args.sessions.split(",") if p.strip()] or None
 
     db = Path(args.db)
     if not db.exists():
         emit({"error": f"database not found: {db}"}, 1)
     try:
-        payload = build_payload(db, rng, models)
+        payload = build_payload(db, rng, models, sessions)
     except Exception as e:  # 结构化错误交给 Node, 不打 traceback
         emit({"error": str(e)}, 1)
     sys.stdout.write(json.dumps(payload, ensure_ascii=False))

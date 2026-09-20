@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MiniMax Code Token 用量看板</title>
+<title>Token 用量看板</title>
 <script src="/echarts.min.js"></script>
 <style>
 :root,
@@ -52,8 +52,8 @@ select:focus-visible,button:focus-visible{outline:2px solid var(--mcode-accent);
 .ddbtn{display:flex;align-items:center;gap:7px;min-width:150px;justify-content:space-between}
 .ddbtn .cnt{color:var(--mcode-accent);font-weight:600}
 .ddbtn .caret{color:var(--mcode-text-muted);display:inline-flex}
-.ddpanel{position:absolute;top:calc(100% + 6px);right:0;z-index:50;
-  width:min(300px,calc(100vw - 40px));
+.ddpanel{position:absolute;top:calc(100% + 6px);left:0;z-index:50;
+  width:min(300px,calc(100vw - 28px));
   background:var(--mcode-surface);border:1px solid var(--mcode-border);
   border-radius:12px;padding:10px;
   box-shadow:0 0 20px rgb(10 10 10 / 8%);display:none}
@@ -128,7 +128,7 @@ footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top
 <div id="app">
 <header>
   <div class="hgroup">
-    <h1>MiniMax Code Token 用量看板</h1>
+    <h1>Token 用量看板</h1>
     <p class="sub">统计本机 MiniMax Code 会话的 token 消耗，可按模型和会话筛选</p>
     <p class="sub" id="dbinfo" role="status">正在读取本地用量数据…</p>
   </div>
@@ -150,6 +150,25 @@ footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top
           <a id="ddInvert" role="button" tabindex="0">反选</a>
         </div>
         <div class="ddlist" id="ddList"></div>
+      </div>
+    </div>
+
+    <div class="dd" id="sessDd">
+      <button class="ddbtn" id="sdBtn" aria-haspopup="true" aria-expanded="false">
+        <span id="sdLabel">会话: 全部</span>
+        <span class="caret" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M1.5 3.5 L5 7 L8.5 3.5" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </button>
+      <div class="ddpanel" id="sdPanel" role="menu">
+        <div class="ddhead">
+          <a id="sdAll" role="button" tabindex="0">全选</a>
+          <a id="sdInvert" role="button" tabindex="0">反选</a>
+        </div>
+        <div class="ddlist" id="sdList"></div>
       </div>
     </div>
 
@@ -254,6 +273,8 @@ mqLight.addEventListener('change',()=>{if(themeMode==='auto')applyTheme();});
 
 /* 模型筛选状态: null = 全部；不做持久化，每次打开都从全部模型开始 */
 let sel=null;
+/* 会话筛选状态: null = 全部 */
+let selSess=null;
 
 let splitMode=false;
 let mainChart=null,modelChart=null,timer=null,lastData=null;
@@ -270,6 +291,22 @@ function modelTag(m){
 }
 
 /* ---------- 多选下拉 ---------- */
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const truncName=(s,n=12)=>{s=String(s||'');return s.length>n?s.slice(0,n)+'…':s;};
+
+/* 面板按视口边缘收敛，避免窄面板下溢出屏幕 */
+function positionPanel(btn,panel){
+  const vw=document.documentElement.clientWidth,gap=14;
+  const w=Math.min(300,vw-gap*2);
+  const b=btn.getBoundingClientRect(),host=btn.parentElement.getBoundingClientRect();
+  let left=b.left;
+  if(left+w>vw-gap)left=vw-gap-w;
+  if(left<gap)left=gap;
+  panel.style.width=w+'px';
+  panel.style.left=(left-host.left)+'px';
+  panel.style.right='auto';
+}
+
 function renderDd(avail){
   const list=$('ddList');
   const order=(avail||[]).map(m=>m.model);
@@ -318,18 +355,89 @@ function ddSet(mode){
   load();
 }
 
-$('ddBtn').onclick=e=>{
-  e.stopPropagation();
-  const open=$('ddPanel').classList.toggle('open');
-  $('ddBtn').setAttribute('aria-expanded',open?'true':'false');
-};
-$('ddPanel').onclick=e=>e.stopPropagation();
+/* ---------- 会话多选下拉 ---------- */
+function sessList(){return (lastData&&lastData.available_sessions)||[];}
+function sessName(s){
+  const t=(s.title||'').trim();
+  return t||s.session_id.slice(0,8);
+}
+
+function renderSd(avail){
+  const list=$('sdList');
+  const keepTop=list.scrollTop;
+  const order=(avail||[]).map(s=>s.session_id);
+
+  list.innerHTML=(avail||[]).map(s=>{
+    const name=sessName(s);
+    return `
+    <label class="ddrow">
+      <input type="checkbox" data-sess="${esc(s.session_id)}" ${(!selSess||selSess.includes(s.session_id))?'checked':''}>
+      <span class="mname" title="${esc(name)}">${esc(truncName(name))}</span>
+      <span class="mmeta">${s.calls?`${fmt(s.calls)} 次 · ${fmtTok(s.tokens)}`:'无用量数据'}</span>
+    </label>`;
+  }).join('') || '<div class="sub" style="padding:8px">当前范围无会话数据</div>';
+
+  list.querySelectorAll('input[data-sess]').forEach(cb=>{
+    cb.onchange=()=>{
+      const picked=[...list.querySelectorAll('input[data-sess]')]
+        .filter(x=>x.checked).map(x=>x.dataset.sess);
+      selSess=(picked.length===order.length)?null:(picked.length?picked:[]);
+      if(selSess&&selSess.length===0){ // 全不选 -> 视为全部，避免空图
+        selSess=null;
+        list.querySelectorAll('input[data-sess]').forEach(x=>x.checked=true);
+      }
+      updateSdLabel();load();
+    };
+  });
+  list.scrollTop=keepTop; // 自动刷新重建时保留滚动位置
+  updateSdLabel();
+}
+
+function updateSdLabel(){
+  const n=selSess?selSess.length:null;
+  if(!selSess)$('sdLabel').innerHTML='会话: <span class="cnt">全部</span>';
+  else if(n===1){
+    const s=sessList().find(x=>x.session_id===selSess[0]);
+    $('sdLabel').innerHTML=`会话: <span class="cnt">${esc(truncName(s?sessName(s):selSess[0],8))}</span>`;
+  }
+  else $('sdLabel').innerHTML=`已选 <span class="cnt">${n}</span> 个会话`;
+}
+
+function sdSet(mode){
+  if(!lastData)return;
+  const all=sessList().map(s=>s.session_id);
+  if(mode==='all')selSess=null;
+  else if(mode==='invert'){
+    const cur=selSess||all;
+    const inv=all.filter(id=>!cur.includes(id));
+    selSess=inv.length?inv:null;
+  }
+  renderSd(sessList());
+  load();
+}
+
+function bindDd(btnId,panelId){
+  const btn=$(btnId),panel=$(panelId);
+  btn.onclick=e=>{
+    e.stopPropagation();
+    const open=panel.classList.toggle('open');
+    btn.setAttribute('aria-expanded',open?'true':'false');
+    if(open)positionPanel(btn,panel);
+  };
+  panel.onclick=e=>e.stopPropagation();
+}
+bindDd('ddBtn','ddPanel');
+bindDd('sdBtn','sdPanel');
 document.addEventListener('click',()=>{
-  $('ddPanel').classList.remove('open');
-  $('ddBtn').setAttribute('aria-expanded','false');
+  [['ddBtn','ddPanel'],['sdBtn','sdPanel']].forEach(([b,p])=>{
+    $(p).classList.remove('open');
+    $(b).setAttribute('aria-expanded','false');
+  });
 });
 $('ddAll').onclick=()=>ddSet('all');
 $('ddInvert').onclick=()=>ddSet('invert');
+$('sdAll').onclick=()=>sdSet('all');
+$('sdInvert').onclick=()=>sdSet('invert');
 
 /* ---------- 视图切换 ---------- */
 $('viewToggle').onclick=e=>{
@@ -347,6 +455,7 @@ $('viewToggle').onclick=e=>{
 function apiUrl(){
   let u='/api/data?range='+$('range').value;
   if(sel&&sel.length)u+='&models='+encodeURIComponent(sel.join(','));
+  if(selSess&&selSess.length)u+='&sessions='+encodeURIComponent(selSess.join(','));
   return u;
 }
 
@@ -362,16 +471,28 @@ async function load(){
       const kept=sel.filter(m=>avail.has(m));
       if(kept.length!==sel.length)sel=kept.length?kept:null;
     }
+    if(selSess){
+      const avail=new Set((d.available_sessions||[]).map(s=>s.session_id));
+      const kept=selSess.filter(id=>avail.has(id));
+      if(kept.length!==selSess.length)selSess=kept.length?kept:null;
+    }
     render(d);
+    const unit=d.session_source==='files'?'个会话文件':'个会话';
     $('dbinfo').textContent=
-      `已更新 ${d.generated_at.slice(11,16)} · ${d.overview.sessions} 个会话`;
+      `已更新 ${d.generated_at.slice(11,19)} · ${d.session_files??d.overview.sessions} ${unit}`;
   }catch(e){toast('请求失败: '+e.message)}
 }
 
 function render(d){
   renderDd(d.available_models);
+  renderSd(d.available_sessions);
   const o=d.overview;
-  const scope=sel?(sel.length===1?sel[0]:sel.length+' 个模型'):'全部模型';
+  const mScope=sel?(sel.length===1?sel[0]:sel.length+' 个模型'):'全部模型';
+  let scope=mScope;
+  if(selSess){
+    const s=d.available_sessions.find(x=>x.session_id===selSess[0]);
+    scope=`${mScope} · ${selSess.length===1?(s?truncName(sessName(s)):'1 个会话'):selSess.length+' 个会话'}`;
+  }
   $('bucketInfo').textContent=o.calls
     ? `（${scope} · ${fmt(o.calls)} 次调用 · 命中 ${o.hit_rate_pct}% · 加权输出 ${o.avg_tok_s} tok/s）`
     : `（${scope}）`;
@@ -556,6 +677,7 @@ window.addEventListener('resize',()=>{
 
 (function boot(){
   applyTheme();
+  setTimer(); // 启动即开始按所选间隔自动刷新
   if(window.echarts)load();
   else setTimeout(boot,300);
 })();

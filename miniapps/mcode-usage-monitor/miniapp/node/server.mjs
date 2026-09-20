@@ -88,12 +88,14 @@ export async function start(context) {
     });
   }
 
-  function queryBackend(rangeKey, models) {
-    const key = `${rangeKey}|${models ? models.join(',') : ''}`;
+  function queryBackend(rangeKey, models, sessions) {
+    const key = `${rangeKey}|${models ? models.join(',') : ''}|${sessions ? sessions.join(',') : ''}`;
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.promise;
     const promise = queue.then(() =>
-      runPython(['--range', rangeKey, '--models', models ? models.join(',') : '']));
+      runPython(['--range', rangeKey,
+                 '--models', models ? models.join(',') : '',
+                 '--sessions', sessions ? sessions.join(',') : '']));
     cache.set(key, { at: Date.now(), promise });
     promise.catch(() => cache.delete(key)); // 失败不缓存
     queue = promise.catch(() => {}); // 链条继续
@@ -135,7 +137,12 @@ export async function start(context) {
       const models = rawModels
         ? rawModels.split(',').map((s) => s.trim()).filter(Boolean)
         : null;
-      queryBackend(rangeKey, models && models.length ? models : null)
+      const rawSessions = url.searchParams.get('sessions');
+      const sessions = rawSessions
+        ? rawSessions.split(',').map((s) => s.trim()).filter(Boolean)
+        : null;
+      queryBackend(rangeKey, models && models.length ? models : null,
+                   sessions && sessions.length ? sessions : null)
         .then((payload) => sendJson(res, 200, payload))
         .catch((err) => sendJson(res, 502, { error: `backend unavailable: ${err.message}` }));
       return;
