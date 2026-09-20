@@ -89,6 +89,7 @@ section.panel{background:var(--mcode-surface);border:1px solid var(--mcode-borde
 .chart{width:100%}
 #mainChart{height:340px}
 #modelChart{height:260px}
+#speedChart{height:220px}
 .empty{padding:40px;text-align:center;color:var(--mcode-text-muted);font-size:13px}
 table{width:100%;border-collapse:collapse;font-size:13px;
   font-variant-numeric:tabular-nums}
@@ -102,6 +103,7 @@ tr:hover td{background:var(--mcode-bg-secondary)}
 .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;
   border:1px solid var(--mcode-border);white-space:nowrap}
 .tablewrap{max-height:420px;overflow:auto}
+.tfoot{color:var(--mcode-text-muted);font-size:12px;text-align:center;padding:8px 2px 2px}
 footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top:8px}
 footer a{color:var(--mcode-accent);text-decoration:none}
 footer a:hover{text-decoration:underline}
@@ -119,6 +121,7 @@ footer a:hover{text-decoration:underline}
   .panel{padding:10px 12px;border-radius:12px}
   #mainChart{height:260px}
   #modelChart{height:220px}
+  #speedChart{height:190px}
   .tablewrap{max-height:360px}
   table{min-width:620px}
   select,button{font-size:12px;padding:4px 8px}
@@ -177,10 +180,10 @@ footer a:hover{text-decoration:underline}
     <label class="sub" for="range" style="position:absolute;left:-9999px">时间范围</label>
     <select id="range">
       <option value="1h">最近 1 小时</option>
-      <option value="24h">最近 24 小时</option>
+      <option value="24h" selected>最近 24 小时</option>
       <option value="7d">最近 7 天</option>
       <option value="30d">最近 30 天</option>
-      <option value="all" selected>全部</option>
+      <option value="all">全部</option>
     </select>
     <label class="sub" for="interval" style="position:absolute;left:-9999px">刷新间隔</label>
     <select id="interval">
@@ -217,6 +220,13 @@ footer a:hover{text-decoration:underline}
   <div id="modelChart" class="chart"></div>
 </section>
 
+<section class="panel" aria-label="Token 速度">
+  <div class="phead"><h2>Token 速度</h2>
+    <span class="sub">tokens/sec · 每次完成请求</span></div>
+  <div id="speedChart" class="chart"></div>
+  <div class="empty" id="speedEmpty" style="display:none">当前筛选条件下没有速度数据</div>
+</section>
+
 <section class="panel" aria-label="最近调用">
   <div class="phead"><h2>最近调用</h2><span class="sub" id="recentInfo"></span></div>
   <div class="tablewrap">
@@ -229,6 +239,7 @@ footer a:hover{text-decoration:underline}
     <tbody id="recentBody"></tbody>
   </table>
   </div>
+  <div class="tfoot" id="recentFoot"></div>
 </section>
 
 <footer>只读本地数据库，不影响运行中的 MiniMax Code<br>建议与反馈请到 <a href="https://github.com/yanhy2000/mCode-monitor" target="_blank" rel="noreferrer">GitHub 仓库</a></footer>
@@ -248,6 +259,7 @@ const palette=()=>['--mcode-chart-1','--mcode-chart-2','--mcode-chart-3',
   '--mcode-chart-4','--mcode-chart-5','--mcode-chart-6'].map(cssVar);
 const colorOf=i=>palette()[i%6];
 const isNarrow=()=>window.innerWidth<680;
+const RANGE_LABEL={'1h':'1H','24h':'24H','7d':'7D','30d':'30D','all':'全部'};
 
 /* ---------- 主题: 跟随系统配色; 按钮可临时切换, 不持久化 ---------- */
 const THEME={
@@ -265,7 +277,7 @@ function applyTheme(){
   document.documentElement.dataset.theme=effective;
   $('themeBtn').textContent='主题: '+THEME_NAME[themeMode];
   $('themeBtn').title='主题: '+THEME_NAME[themeMode]+'（点击切换）';
-  if(lastData&&window.echarts){renderMain(lastData);renderModels(lastData.models);}
+  if(lastData&&window.echarts){renderMain(lastData);renderModels(lastData.models);renderSpeed(lastData.recent);}
 }
 $('themeBtn').onclick=()=>{
   themeMode=themeMode==='auto'?'light':(themeMode==='light'?'dark':'auto');
@@ -527,8 +539,8 @@ function render(d){
     ['输出 tokens',fmtTok(o.output_tokens),`累计生成 ${o.sum_dur_s}s`],
     ['缓存读取',fmtTok(o.cache_read_tokens),'服务端命中的缓存'],
     ['缓存命中率',o.hit_rate_pct+'%','cache_read / (cache_read+input)'],
-    ['调用次数',fmt(o.calls),scope],
-    ['输出速度',o.avg_tok_s+' tok/s','Σoutput / Σduration 加权'],
+    ['请求次数',fmt(o.calls),scope],
+    [`平均输出速度(${RANGE_LABEL[$('range').value]||'全部'})`,o.avg_tok_s+' tok/s','Σoutput / Σduration 加权'],
   ];
   $('kpis').innerHTML=cards.map(c=>
     `<div class="kpi"><div class="label">${c[0]}</div>
@@ -536,6 +548,7 @@ function render(d){
 
   renderMain(d);
   renderModels(d.models);
+  renderSpeed(d.recent);
   renderRecent(d.recent);
 }
 
@@ -663,6 +676,43 @@ function renderModels(ms){
   },true);
 }
 
+/* ---------- Token 速度: 最近调用的逐次 tok/s ---------- */
+let speedChart=null;
+function renderSpeed(rs){
+  const rows=(rs||[]).slice().reverse(); // 旧 -> 新
+  const has=rows.some(r=>r.tok_s>0);
+  $('speedEmpty').style.display=has?'none':'block';
+  $('speedChart').style.display=has?'block':'none';
+  if(!has||!window.echarts)return;
+  if(!speedChart)speedChart=echarts.init($('speedChart'));
+  const ok=cssVar('--mcode-success'),warn=cssVar('--mcode-warning'),
+        mute=cssVar('--mcode-text-muted'),line=cssVar('--mcode-chart-3');
+  const data=rows.map(r=>({value:r.tok_s,
+    itemStyle:{color:r.tok_s>80?ok:(r.tok_s>30?warn:mute)}}));
+  speedChart.setOption({
+    backgroundColor:'transparent',
+    tooltip:{trigger:'axis',backgroundColor:T().tipBg,borderColor:T().tipBorder,
+      textStyle:{color:T().tipText,fontSize:isNarrow()?11:12},confine:true,
+      formatter:p=>{
+        const r=rows[p[0].dataIndex];
+        return `${r.time} · ${r.model}<br>${r.tok_s} tok/s · 输出 ${fmt(r.output)} · ${(r.dur_ms/1000).toFixed(1)}s`;
+      }},
+    grid:{left:isNarrow()?48:66,right:18,top:16,bottom:isNarrow()?22:28},
+    xAxis:{type:'category',data:rows.map(r=>r.time.slice(6,11)),
+      boundaryGap:false,
+      axisLine:{lineStyle:{color:T().axis}},
+      axisLabel:{color:T().label,fontSize:isNarrow()?10:12}},
+    yAxis:{type:'value',name:isNarrow()?'':'tok/s',
+      nameLocation:'middle',nameRotate:90,nameGap:46,
+      splitLine:{lineStyle:{color:T().split}},
+      axisLabel:{color:T().label,fontSize:isNarrow()?10:12},
+      nameTextStyle:{color:T().label}},
+    series:[{type:'line',data,symbol:'circle',symbolSize:5,smooth:false,
+      lineStyle:{color:line,width:1.5},emphasis:{focus:'series'}}],
+  },true);
+  speedChart.resize();
+}
+
 function renderRecent(rs){
   $('recentBody').innerHTML=rs.length?rs.map(r=>`<tr>
     <td>${r.time}</td>
@@ -675,6 +725,14 @@ function renderRecent(rs){
     <td>${(r.dur_ms/1000).toFixed(1)}s</td>
     <td style="color:${r.tok_s>80?'var(--mcode-success)':(r.tok_s>30?'var(--mcode-warning)':'var(--mcode-text-muted)')}">${r.tok_s||'—'}</td>
   </tr>`).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--mcode-text-muted);padding:20px">无数据</td></tr>';
+  // 底部汇总: 按当前表内(最近 60 条)的全部值计算
+  if(!rs.length){$('recentFoot').textContent='';return}
+  let out=0,dur=0,tot=0;
+  rs.forEach(r=>{out+=r.output||0;dur+=r.dur_ms||0;
+    tot+=(r.input||0)+(r.cache_read||0)+(r.output||0)});
+  const avg=dur?(out/(dur/1000)):0;
+  $('recentFoot').textContent=
+    `平均 ${avg.toFixed(1)} t/s · 总 TOKEN ${fmtTok(tot)} · 请求 ${rs.length}`;
 }
 
 function setTimer(){
@@ -690,10 +748,11 @@ let rzT=null;
 window.addEventListener('resize',()=>{
   mainChart&&mainChart.resize();
   modelChart&&modelChart.resize();
+  speedChart&&speedChart.resize();
   // 跨过窄屏断点时重算布局（轴名称/边距/字号按 isNarrow() 切换）
   clearTimeout(rzT);
   rzT=setTimeout(()=>{
-    if(lastData){renderMain(lastData);renderModels(lastData.models);}
+    if(lastData){renderMain(lastData);renderModels(lastData.models);renderSpeed(lastData.recent);}
   },200);
 });
 
