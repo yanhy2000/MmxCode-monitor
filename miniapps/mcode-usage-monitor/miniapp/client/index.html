@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MmxCode 用量监控</title>
+<title>MiniMax Code Token 用量看板</title>
 <script src="/echarts.min.js"></script>
 <style>
 :root,
@@ -31,11 +31,13 @@ body{background:var(--mcode-bg);color:var(--mcode-text);
     Roboto,Helvetica,Arial,sans-serif;
   max-width:1240px;margin:0 auto;
   padding:clamp(12px,2vw,20px) clamp(14px,3vw,24px) 40px}
-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
-h1{font-size:18px;font-weight:600}
-h1 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;
-  background:var(--mcode-success);margin-right:8px}
-.sub{color:var(--mcode-text-muted);font-size:12px}
+header{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:12px 16px;flex-wrap:wrap;margin-bottom:16px}
+.hgroup{display:flex;flex-direction:column;gap:2px}
+h1{font-size:18px;font-weight:600;line-height:28px}
+.sub{color:var(--mcode-text-muted);font-size:12px;line-height:16px}
+#dbinfo{color:var(--mcode-text-subtle)}
+.hctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:2px}
 .spacer{flex:1}
 select,button{background:var(--mcode-bg-secondary);color:var(--mcode-text);
   border:1px solid var(--mcode-border);border-radius:8px;padding:4px 10px;
@@ -125,51 +127,54 @@ footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top
 <body>
 <div id="app">
 <header>
-  <h1><span class="dot" aria-hidden="true"></span>MmxCode 用量监控</h1>
-  <span class="sub" id="dbinfo"></span>
-  <div class="spacer"></div>
-
-  <div class="dd" id="modelDd">
-    <button class="ddbtn" id="ddBtn" aria-haspopup="true" aria-expanded="false">
-      <span id="ddLabel">模型: 全部</span>
-      <span class="caret" aria-hidden="true">
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-          <path d="M1.5 3.5 L5 7 L8.5 3.5" stroke="currentColor" stroke-width="1.4"
-                stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-    </button>
-    <div class="ddpanel" id="ddPanel" role="menu">
-      <div class="ddhead">
-        <a id="ddAll" role="button" tabindex="0">全选</a>
-        <a id="ddInvert" role="button" tabindex="0">反选</a>
-      </div>
-      <div class="ddlist" id="ddList"></div>
-    </div>
+  <div class="hgroup">
+    <h1>MiniMax Code Token 用量看板</h1>
+    <p class="sub">统计本机 MiniMax Code 会话的 token 消耗，可按模型和会话筛选</p>
+    <p class="sub" id="dbinfo" role="status">正在读取本地用量数据…</p>
   </div>
 
-  <label class="sub" for="range" style="position:absolute;left:-9999px">时间范围</label>
-  <select id="range">
-    <option value="1h">最近 1 小时</option>
-    <option value="24h">最近 24 小时</option>
-    <option value="7d">最近 7 天</option>
-    <option value="30d">最近 30 天</option>
-    <option value="all" selected>全部</option>
-  </select>
-  <label class="sub" for="interval" style="position:absolute;left:-9999px">刷新间隔</label>
-  <select id="interval">
-    <option value="0">手动刷新</option>
-    <option value="5">自动 5s</option>
-    <option value="10" selected>自动 10s</option>
-    <option value="30">自动 30s</option>
-  </select>
-  <button id="refresh" aria-label="立即刷新数据">刷新</button>
-  <button id="themeBtn" title="主题: 跟随系统（点击切换）">主题: 自动</button>
+  <div class="hctl">
+    <div class="dd" id="modelDd">
+      <button class="ddbtn" id="ddBtn" aria-haspopup="true" aria-expanded="false">
+        <span id="ddLabel">模型: 全部</span>
+        <span class="caret" aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M1.5 3.5 L5 7 L8.5 3.5" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </button>
+      <div class="ddpanel" id="ddPanel" role="menu">
+        <div class="ddhead">
+          <a id="ddAll" role="button" tabindex="0">全选</a>
+          <a id="ddInvert" role="button" tabindex="0">反选</a>
+        </div>
+        <div class="ddlist" id="ddList"></div>
+      </div>
+    </div>
+
+    <label class="sub" for="range" style="position:absolute;left:-9999px">时间范围</label>
+    <select id="range">
+      <option value="1h">最近 1 小时</option>
+      <option value="24h">最近 24 小时</option>
+      <option value="7d">最近 7 天</option>
+      <option value="30d">最近 30 天</option>
+      <option value="all" selected>全部</option>
+    </select>
+    <label class="sub" for="interval" style="position:absolute;left:-9999px">刷新间隔</label>
+    <select id="interval">
+      <option value="0">手动刷新</option>
+      <option value="5">自动 5s</option>
+      <option value="10" selected>自动 10s</option>
+      <option value="30">自动 30s</option>
+    </select>
+    <button id="refresh" aria-label="立即刷新数据">刷新</button>
+    <button id="themeBtn" title="主题: 跟随系统（点击切换）">主题: 自动</button>
+  </div>
 </header>
 
 <div id="toast" role="alert"></div>
 <div class="kpis" id="kpis"></div>
-<div class="empty" id="bootStatus" role="status">正在读取本地用量数据…</div>
 
 <section class="panel" aria-label="Token 消耗时序">
   <div class="phead">
@@ -205,7 +210,7 @@ footer{color:var(--mcode-text-muted);font-size:12px;text-align:center;margin-top
   </div>
 </section>
 
-<footer id="foot"></footer>
+<footer>只读本地数据库，不影响运行中的 MiniMax Code</footer>
 </div>
 
 <script>
@@ -358,14 +363,12 @@ async function load(){
       if(kept.length!==sel.length)sel=kept.length?kept:null;
     }
     render(d);
-    const l=d.ledger;
-    const dup=d.dedup_dropped?` · 跨会话去重 ${d.dedup_dropped} 行`:'';
-    $('foot').textContent=`快照 ${d.generated_at} · 账本表 ${l?fmt(l.rows)+' 条':''}${dup} · 只读快照，不影响运行中的 MiniMax Code`;
+    $('dbinfo').textContent=
+      `已更新 ${d.generated_at.slice(11,16)} · ${d.overview.sessions} 个会话`;
   }catch(e){toast('请求失败: '+e.message)}
 }
 
 function render(d){
-  $('bootStatus').style.display='none';
   renderDd(d.available_models);
   const o=d.overview;
   const scope=sel?(sel.length===1?sel[0]:sel.length+' 个模型'):'全部模型';

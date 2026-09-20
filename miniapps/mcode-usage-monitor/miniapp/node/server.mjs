@@ -15,7 +15,7 @@ const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 const RANGE_KEYS = ['1h', '24h', '7d', '30d', 'all'];
 
 /**
- * mmx-usage-monitor Node 入口:
+ * mcode-usage-monitor Node 入口:
  *  - 在 Host 分配的端口上服务 /dashboard(客户端页面)与 /echarts.min.js
  *  - /api/data 通过一次性 spawn python api.py 取数(stdout JSON),
  *    不建立 Node->本机端口的 TCP 连接(该路径在 Mini App 运行时内不可用)

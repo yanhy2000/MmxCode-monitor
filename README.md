@@ -1,142 +1,49 @@
-# MmxCode-monitor
+﻿# mcode-monitor
 
-MiniMax Code 本地用量监控台 —— 终端一条命令启动，浏览器里看 token 消耗、输出速度、缓存命中率。
+MiniMax Code 本地用量监控面板（Mini App 版）。装进 MiniMax Code 后随时打开，看 token 消耗、输出速度、缓存命中率和各模型的用量分布。
 
 <p align="center">
-  <img src="img/ui.png" width="720" alt="MmxCode-monitor 界面预览" />
+  <img src="img/ui.png" width="720" alt="mcode-monitor 界面预览" />
 </p>
 
-无第三方依赖（仅 Python 标准库 + 本地化的 ECharts），只读访问运行中的本地数据库，不影响正在使用的 MiniMax Code。
+只读读取本地数据库，不影响正在使用的 MiniMax Code，无需安装任何依赖包。
 
 ## 功能
 
-- **KPI 总览**：Token 消耗（输入 + 缓存 + 输出，M/K 单位）、输入 / 输出 / 缓存读取、缓存命中率、调用次数、加权输出速度
-- **Token 消耗时序**：按数据跨度自动分桶（分钟 → 小时 → 天 → 周），缓存 + 输入堆叠柱 + 输出平滑曲线双轴
-- **模型筛选**：多选下拉（全选 / 反选 / 单点勾选），筛选实时作用于全部图表与表格
-- **按模型拆分视图**：一键把时序图切成分模型的多条输出曲线
-- **模型对比**：总输入柱状 + 调用次数 / 输出速度双曲线，点击柱子可快速只看该模型
-- **最近调用明细**：时间、模型、会话标题、tokens 明细、耗时、单次输出速度
-- **双主题**：亮 / 暗两套配色，跟随浏览器 `prefers-color-scheme`（默认暗色），支持临时切换（不持久化）
-- **时间范围**：最近 1 小时 / 24 小时 / 7 天 / 30 天 / 全部
-- **自动刷新**：5s / 10s / 30s / 手动
+- KPI 总览：token 消耗、输入 / 输出 / 缓存读取、缓存命中率、调用次数、输出速度
+- Token 消耗时序：按时间跨度自动分桶，缓存 + 输入堆叠柱与输出曲线
+- 模型筛选：多选下拉，实时作用于全部图表与表格
+- 按模型拆分：一键切换为各模型的输出曲线
+- 模型对比：输入总量柱状图 + 调用次数 / 输出速度双曲线
+- 最近调用明细：时间、模型、会话、tokens、耗时、速度
+- 亮 / 暗双主题，跟随系统
+- 时间范围：最近 1 小时 / 24 小时 / 7 天 / 30 天 / 全部
+- 自动刷新：5s / 10s / 30s / 手动
 
-## 环境要求
+## 安装
 
-- Python 3.8+
-- 无需 pip 安装任何包
+本机需要 Python 3.8+（无需 pip 安装任何包）。
 
-## 快速开始
+把仓库里的 `miniapps/mcode-usage-monitor` 文件夹放进 `~/.minimax/plugins/` 目录：
 
-```bash
-git clone https://github.com/yanhy2000/MmxCode-monitor.git
-cd MmxCode-monitor
-python monitor.py
-```
-
-默认监听 `127.0.0.1:7341` 并自动打开浏览器。
-
-### 命令行参数
-
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| `--port` | 监听端口（被占用时自动 +1 重试） | `7341` |
-| `--host` | 监听地址 | `127.0.0.1` |
-| `--db` | 数据库文件路径 | 自动探测 |
-| `--no-browser` | 不自动打开浏览器 | - |
-
-```bash
-python monitor.py --port 8000 --no-browser
-python monitor.py --db "D:/path/to/runtime-state.sqlite"
-```
-
-数据库路径默认按以下顺序探测，也可用环境变量 `MINIMAX_DATA_DIR` 指定数据目录：
-
-```
-$MINIMAX_DATA_DIR/v2/sqlite/runtime-state.sqlite
-~/.minimax/v2/sqlite/runtime-state.sqlite
-```
-
-## 数据来源
-
-所有数据来自 MiniMax Code 的本地运行时数据库：
-
-```
-~/.minimax/v2/sqlite/runtime-state.sqlite
-```
-
-主要用到两张表：
-
-### `local_runtime_message_rows`
-
-每条消息一行的 JSON 记录，其中 `data_json` 里带有单次模型调用的完整用量信息：
-
-```json
-{
-  "usage": {
-    "total_tokens": 27117,
-    "context_window": 512000,
-    "input_tokens": 321,
-    "output_tokens": 252,
-    "cache_read": 26544,
-    "request_duration_ms": 1476
-  },
-  "context_usage_telemetry": { "model": "MiniMax-M3" }
-}
-```
-
-模型名在 `context_usage_telemetry.model` 字段里。
-
-### `local_runtime_token_usage`
-
-结构化的计费账本表，字段为 `input_tokens` / `output_tokens` / `reasoning_tokens` / `cache_read_tokens` / `cache_write_tokens` / `cost_usd`，适合做跨会话的账单聚合。当前界面用它做交叉核对。
-
-## 指标口径
-
-| 指标 | 计算方式 |
+| 系统 | 目标位置 |
 | --- | --- |
-| Token 消耗 | `input_tokens + cache_read + output_tokens`（M/K 单位展示） |
-| 去重 | 同一 `msg_id` 只计最早一条（迁移产生的跨会话副本不重复计） |
-| 缓存命中率 | `cache_read / (cache_read + input_tokens)` |
-| 输出速度 | `Σ output_tokens / Σ request_duration_ms × 1000`（请求级加权平均） |
-| 单次速度 | `output_tokens / request_duration_ms × 1000` |
+| Windows | `C:\Users\<用户名>\.minimax\plugins\mcode-usage-monitor` |
+| macOS / Linux | `~/.minimax/plugins/mcode-usage-monitor` |
 
-**关于缓存命中率的数据来源**：`usage.cache_read` 是服务端下发的权威值，客户端也会用本地 tokenizer 估算一份（`context_usage_telemetry.localTokens`），两者存在约 3~4% 的稳定偏差，对应字段 `context_usage_telemetry.divergenceRate`。本工具一律采用服务端数值，客户端估算仅作为一致性参考。
+然后从 MiniMax Code 的 Mini App 入口打开「mcode Token 用量看板」即可。
 
-### 与产品内「用量」页面的差异
+关闭页面不影响使用，随时从同一入口再次打开；想卸载，删掉上面那个文件夹就行。
 
-产品内的用量页（设置 → 用量）和本工具统计的是同一批调用，但数字对不齐。以下均为 MiniMax-M3 单模型口径。
+## 指标说明
 
-一是服务端统计有延迟，二是本地库有重复副本。会话迁移或派生时，历史消息会整份复制进新会话，两份行的 `msg_id` 和 usage 完全相同。本工具按 `msg_id` 跨会话去重、保留最早一条，与官方账本表 `local_runtime_token_usage` 的计数一致；API 返回的 `dedup_dropped` 字段即去掉的行数。
+| 指标 | 含义 |
+| --- | --- |
+| Token 消耗 | 输入 + 缓存读取 + 输出 |
+| 缓存命中率 | prompt 里直接命中缓存的比例，越高越省 |
+| 输出速度 | 输出 tokens ÷ 耗时的加权平均 |
 
-计费和额度以产品内展示为准；本工具读的是本地运行时库，适合看实时趋势和分布，不适合作为计费依据。
-
-## 安全性
-
-- 每次请求都通过 **SQLite 官方 backup API**（`mode=ro` 只读 URI + `src.backup(dst)`）取一份内存快照再查询，正确处理 WAL、不锁库、不阻塞写入方
-- 极端锁场景回退到"复制 db / -wal / -shm 三件套到临时目录"方案
-- 全程只读，不对 MiniMax Code 的数据做任何写入或修改
-
-## 项目结构
-
-```
-MmxCode-monitor/
-├── monitor.py           # 终端程序入口：HTTP 服务 + 只读快照 + JSON API
-├── static/
-│   ├── index.html       # 单页监控台
-│   └── echarts.min.js   # 本地化 ECharts（离线可用）
-├── img/
-│   └── ui.png           # 界面预览图
-├── LICENSE
-└── README.md
-```
-
-前端通过 `/api/data?range=<范围>&models=<模型列表>` 获取聚合结果，`models` 参数省略时返回全部模型。
-
-## 已知限制
-
-- `cost_usd` 字段在本地库中恒为 0，暂未提供成本估算
-- 模型筛选状态不做持久化，刷新后回到"全部模型"
-- 时区按运行机器的本地时区（UTC+8）渲染
+计费与额度以 MiniMax Code 产品内的用量页展示为准。
 
 ## 关于 AI 生成
 
@@ -148,7 +55,7 @@ MmxCode-monitor/
 
 ## 第三方组件
 
-- [ECharts](https://echarts.apache.org/) — Apache License 2.0，已本地化打包以便离线使用（若加载失败会自动回退到 CDN）
+- [ECharts](https://echarts.apache.org/) — Apache License 2.0，已本地化打包以便离线使用
 
 ## License
 

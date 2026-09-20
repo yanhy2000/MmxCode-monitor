@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""MmxCode-monitor — MiniMax Code 本地 token 用量监控台。
+"""mcode-usage-monitor Mini App 的数据后端（一次性 CLI 模式）。
 
-零第三方依赖（仅 Python 标准库）。
-数据源: <DATA_DIR>/v2/sqlite/runtime-state.sqlite
-       （每次请求做只读快照，不写入、不锁库，不影响正在运行的 MiniMax Code）
+由 Node 入口(server.mjs)按需 spawn，查询结果以单个 JSON 写到 stdout 后退出。
+不做 HTTP 监听：Mini App 运行时内 Node 到本机端口的直连不可用，子进程 stdout 是稳定通道。
+数据逻辑与仓库根目录 monitor.py 保持一致:
+  - SQLite 官方 backup API 只读快照(不锁库, 不影响运行中的 MiniMax Code)
+  - 按 msg_id 跨会话去重(保留最早一条)
+  - 时间分桶 / 模型聚合 / 最近调用
 
-用法:
-    python monitor.py                     # 默认端口 7341, 自动打开浏览器
-    python monitor.py --port 8000         # 指定端口
-    python monitor.py --no-browser        # 不自动开浏览器
-    python monitor.py --db D:/path/x.db   # 指定数据库文件
+用法: python api.py [--range all|1h|24h|7d|30d] [--models a,b] [--db PATH]
 """
 
 import argparse
@@ -19,24 +18,15 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-import threading
 import time
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-DEFAULT_PORT = 7341
-
-# ---------------------------------------------------------------------------
-# 数据库快照读取
-# ---------------------------------------------------------------------------
 
 def default_db_path() -> Path:
     data_dir = os.environ.get("MINIMAX_DATA_DIR") or (Path.home() / ".minimax")
@@ -44,12 +34,7 @@ def default_db_path() -> Path:
 
 
 def open_snapshot(db_path: Path) -> sqlite3.Connection:
-    """安全获取一份一致性内存快照。
-
-    优先: 只读 URI 打开源库 + sqlite3 backup API（官方推荐的在线备份方式，
-    能正确处理 WAL，且不会阻塞写入方）。
-    回退: 复制 db/-wal/-shm 三件套到临时目录再打开（极端锁场景）。
-    """
+    """只读快照: 官方 backup API 优先, 极端锁场景回退到复制三件套。"""
     try:
         uri = f"file:{db_path.as_posix()}?mode=ro"
         src = sqlite3.connect(uri, uri=True, timeout=3)
@@ -59,7 +44,7 @@ def open_snapshot(db_path: Path) -> sqlite3.Connection:
         src.close()
         return dst
     except sqlite3.Error:
-        tmpdir = Path(tempfile.mkdtemp(prefix="MmxCode-monitor-"))
+        tmpdir = Path(tempfile.mkdtemp(prefix="mcode-usage-monitor-"))
         try:
             base = tmpdir / "snap.db"
             shutil.copy2(db_path, base)
@@ -68,17 +53,11 @@ def open_snapshot(db_path: Path) -> sqlite3.Connection:
                 if side.exists():
                     shutil.copy2(side, Path(str(base) + suffix))
             con = sqlite3.connect(str(base))
-            con.execute("PRAGMA journal_mode=DELETE")  # 触发 WAL 合并读取
+            con.execute("PRAGMA journal_mode=DELETE")
             return con
         except Exception:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise
-
-
-# 快照结果缓存: 避免并发请求重复 backup
-_cache_lock = threading.Lock()
-_cache = {"at": 0.0, "rows": None, "ledger": None, "dropped": 0, "error": None}
-_CACHE_TTL = 2.0
 
 
 MSG_SQL = """
@@ -98,18 +77,20 @@ WHERE json_extract(m.data_json,'$.usage') IS NOT NULL
 ORDER BY m.created_at_ms, m.id
 """
 
+LEDGER_SQL = """
+SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(reasoning_tokens),
+       SUM(cache_read_tokens), SUM(cache_write_tokens), MIN(ts), MAX(ts),
+       COUNT(DISTINCT session_id), COUNT(DISTINCT turn_id)
+FROM local_runtime_token_usage
+"""
+
 
 def dedup_by_msg_id(rows):
-    """按 msg_id 跨会话去重（保留最早一条），返回 (去重后的行, 丢弃行数)。
-
-    会话迁移/派生会把历史消息整段复制进新会话（msg_id 相同、usage 逐字段一致），
-    官方账本 local_runtime_token_usage 对这类副本只计一次；
-    不去重的话本工具会把同一批调用的 token 重复统计。
-    """
+    """按 msg_id 跨会话去重(保留最早一条), 返回 (去重后的行, 丢弃行数)。"""
     seen = set()
     out = []
     dropped = 0
-    for r in rows:  # MSG_SQL 已按 created_at_ms, id 升序
+    for r in rows:
         mid = r[-1]
         if mid is None or mid not in seen:
             if mid is not None:
@@ -119,51 +100,25 @@ def dedup_by_msg_id(rows):
             dropped += 1
     return out, dropped
 
-LEDGER_SQL = """
-SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(reasoning_tokens),
-       SUM(cache_read_tokens), SUM(cache_write_tokens), MIN(ts), MAX(ts),
-       COUNT(DISTINCT session_id), COUNT(DISTINCT turn_id)
-FROM local_runtime_token_usage
-"""
-
 
 def fetch_all(db_path: Path):
-    """读取并缓存快照，返回 (message_rows, ledger, dedup_dropped)。"""
-    with _cache_lock:
-        now = time.time()
-        if _cache["rows"] is not None and now - _cache["at"] < _CACHE_TTL:
-            if _cache["error"]:
-                raise RuntimeError(_cache["error"])
-            return _cache["rows"], _cache["ledger"], _cache["dropped"]
+    con = open_snapshot(db_path)
     try:
-        con = open_snapshot(db_path)
+        rows, dropped = dedup_by_msg_id(con.execute(MSG_SQL).fetchall())
         try:
-            rows, dropped = dedup_by_msg_id(con.execute(MSG_SQL).fetchall())
-            try:
-                ledger = con.execute(LEDGER_SQL).fetchone()
-            except sqlite3.Error:
-                ledger = None
-        finally:
-            con.close()
-    except Exception as e:
-        with _cache_lock:
-            _cache.update(at=now, rows=None, ledger=None, dropped=0, error=str(e))
-        raise
-    with _cache_lock:
-        _cache.update(at=now, rows=rows, ledger=ledger, dropped=dropped, error=None)
+            ledger = con.execute(LEDGER_SQL).fetchone()
+        except sqlite3.Error:
+            ledger = None
+    finally:
+        con.close()
     return rows, ledger, dropped
 
-
-# ---------------------------------------------------------------------------
-# 聚合
-# ---------------------------------------------------------------------------
 
 RANGE_MS = {"1h": 3600_000, "24h": 86400_000, "7d": 7 * 86400_000,
             "30d": 30 * 86400_000, "all": None}
 
 
 def pick_bucket_step(span_ms: int) -> int:
-    """目标 24~120 个桶，从小到大选步长。"""
     for step in (600_000, 3_600_000, 3 * 3_600_000, 6 * 3_600_000,
                  86_400_000, 7 * 86_400_000):
         if span_ms <= step * 120:
@@ -188,7 +143,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         cutoff = now_ms - span
         rows_all = [r for r in rows_all if r[0] >= cutoff]
 
-    # 模型清单：不受模型筛选影响，供筛选项展示
     avail = {}
     for r in rows_all:
         key = r[1] or "unknown"
@@ -197,7 +151,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         m["output"] += r[5] or 0
     available_models = sorted(avail.values(), key=lambda x: -x["output"])
 
-    # 应用模型筛选
     rows = rows_all
     if models_filter:
         wanted = set(models_filter)
@@ -212,7 +165,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
     tok_s = (sum_out / (sum_dur / 1000)) if sum_dur else 0.0
     sessions = {r[2] for r in rows}
 
-    # --- 时间序列（动态分桶） ---
     series = []
     split = {"labels": [], "models": []}
     if n:
@@ -223,7 +175,7 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
         per_model = {}
         for r in rows:
             b = r[0] // step * step
-            d = buckets.setdefault(b, [0, 0, 0, 0, 0])  # in,out,cr,calls,dur
+            d = buckets.setdefault(b, [0, 0, 0, 0, 0])
             d[0] += r[4] or 0
             d[1] += r[5] or 0
             d[2] += r[6] or 0
@@ -248,7 +200,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
                        for m in models_sorted],
         }
 
-    # --- 按模型 ---
     models = {}
     for r in rows:
         m = models.setdefault(r[1] or "unknown",
@@ -271,7 +222,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
             "tok_s": round(m["output"] / (m["dur"] / 1000), 1) if m["dur"] else 0,
         })
 
-    # --- 最近调用 ---
     recent = []
     for r in reversed(rows[-60:]):
         dur = r[7] or 0
@@ -287,7 +237,6 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
             "tok_s": round((r[5] or 0) / (dur / 1000), 1) if dur else 0,
         })
 
-    # --- 账本表（token_usage 交叉核对） ---
     ledger_obj = None
     if ledger:
         ledger_obj = {
@@ -325,121 +274,29 @@ def build_payload(db_path: Path, range_key: str, models_filter=None) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# HTTP
-# ---------------------------------------------------------------------------
-
-MIME = {".html": "text/html; charset=utf-8",
-        ".js": "application/javascript; charset=utf-8",
-        ".css": "text/css; charset=utf-8",
-        ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
-
-
-class Handler(BaseHTTPRequestHandler):
-    db_path: Path = None  # 类属性注入
-    server_version = "MmxCode-monitor/0.1"
-
-    def log_message(self, fmt, *args):  # 安静些
-        sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
-
-    def _send(self, code: int, body: bytes, ctype: str):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except ConnectionAbortedError:
-            pass
-
-    def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path in ("/", "/index.html"):
-            f = STATIC_DIR / "index.html"
-            if f.exists():
-                self._send(200, f.read_bytes(), MIME[".html"])
-            else:
-                self._send(404, "index.html missing".encode(), "text/plain")
-        elif path == "/echarts.min.js":
-            f = STATIC_DIR / "echarts.min.js"
-            if f.exists():
-                self._send(200, f.read_bytes(), MIME[".js"])
-            else:
-                self._send(404, b"echarts.min.js missing", "text/plain")
-        elif path == "/api/data":
-            rng = "all"
-            models = None
-            qs = self.path.split("?", 1)
-            if len(qs) == 2:
-                for kv in qs[1].split("&"):
-                    if kv.startswith("range="):
-                        rng = kv[6:] or "all"
-                    elif kv.startswith("models="):
-                        raw = unquote(kv[7:])
-                        models = [p.strip() for p in raw.split(",") if p.strip()] or None
-            if rng not in RANGE_MS:
-                rng = "all"
-            try:
-                payload = build_payload(self.db_path, rng, models)
-                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                self._send(200, body, "application/json; charset=utf-8")
-            except Exception as e:
-                obj = {"error": str(e)}
-                self._send(500, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
-                           "application/json; charset=utf-8")
-        elif path == "/favicon.ico":
-            self._send(204, b"", "image/x-icon")
-        else:
-            self._send(404, b"not found", "text/plain")
-
-
 def main():
-    ap = argparse.ArgumentParser(description="MiniMax Code token monitor")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--host", default="127.0.0.1")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--range", default="all", dest="range_key",
+                    help="all | 1h | 24h | 7d | 30d")
+    ap.add_argument("--models", default="", help="逗号分隔的模型列表, 留空为全部")
     ap.add_argument("--db", default=str(default_db_path()))
-    ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
+
+    def emit(obj, code):
+        sys.stdout.write(json.dumps(obj, ensure_ascii=False))
+        sys.exit(code)
+
+    rng = args.range_key if args.range_key in RANGE_MS else "all"
+    models = [p.strip() for p in args.models.split(",") if p.strip()] or None
 
     db = Path(args.db)
     if not db.exists():
-        print(f"[error] database not found: {db}")
-        sys.exit(1)
-
-    # 启动自检: 确认快照可读
+        emit({"error": f"database not found: {db}"}, 1)
     try:
-        rows, ledger, dropped = fetch_all(db)
-        print(f"[ok] snapshot readable: {len(rows)} usage rows, "
-              f"dedup dropped {dropped}, "
-              f"ledger rows={ledger[0] if ledger else 'n/a'}")
-    except Exception as e:
-        print(f"[warn] first snapshot failed (service will keep retrying): {e}")
-
-    port = args.port
-    httpd = None
-    for _ in range(20):
-        try:
-            httpd = ThreadingHTTPServer((args.host, port), Handler)
-            break
-        except OSError:
-            port += 1
-    if httpd is None:
-        print("[error] no free port found")
-        sys.exit(1)
-    Handler.db_path = db
-
-    url = f"http://{args.host}:{port}/"
-    print(f"MmxCode-monitor serving on {url}  (db: {db})")
-    print("press Ctrl+C to stop")
-    if not args.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nbye")
-    finally:
-        httpd.server_close()
+        payload = build_payload(db, rng, models)
+    except Exception as e:  # 结构化错误交给 Node, 不打 traceback
+        emit({"error": str(e)}, 1)
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":
