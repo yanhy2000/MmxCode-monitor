@@ -17,23 +17,29 @@ MiniMax Code 本地用量监控面板（Mini App 版）。装进 MiniMax Code �
 - 模型 / 会话筛选：多选下拉（会话以真实会话文件为准），实时作用于全部图表与表格
 - 按模型拆分：一键切换为各模型的输出曲线
 - 模型对比：输入总量柱状图 + 调用次数 / 输出速度双曲线
+- 项目用量：按会话工作区目录汇总的 Top 8 排行，临时工作区归并显示
+- 工具调用：按次数占比的工具排行，跟随当前筛选
 - Token 速度：最近 60 次请求的逐次 tok/s 折线
 - 最近调用明细与汇总：时间、模型、会话、tokens、耗时、速度
+- 卡片收起 / 展开与拖拽排序：收起后可拖动调整顺序，顶部「重置布局」一键恢复默认
 - 筛选、时间范围、刷新间隔、主题会被记住
 - 亮 / 暗双主题，跟随系统
-- 时间范围：最近 1 小时 / 24 小时（默认）/ 7 天 / 30 天 / 全部
+- 时间范围：今天（默认）/ 1 小时 / 12 小时 / 24 小时 / 7 天 / 30 天 / 全部，支持整数小时自定义（1–8760，只保留最近一条）
 - 自动刷新：5s / 10s / 30s / 手动
 
 ## 安装
 
 本机需要 Python 3.8+（无需 pip 安装任何包）。
 
-把仓库里的 `miniapps/mcode-usage-monitor` 文件夹放进 `~/.minimax/plugins/` 目录：
+把仓库里的 `miniapps/mcode-usage-monitor` 文件夹放进用户目录下的 `.minimax/plugins/` 目录：
 
 | 系统 | 目标位置 |
 | --- | --- |
 | Windows | `C:\Users\<用户名>\.minimax\plugins\mcode-usage-monitor` |
-| macOS / Linux | `~/.minimax/plugins/mcode-usage-monitor` |
+| macOS | `/Users/<用户名>/.minimax/plugins/mcode-usage-monitor` |
+| Linux | `/home/<用户名>/.minimax/plugins/mcode-usage-monitor` |
+
+`.minimax` 是隐藏文件夹（Windows 需勾选「显示隐藏的项目」，macOS 按 `Cmd + Shift + .`），复制时不要漏掉包内的 `.minimax-plugin` 隐藏目录。
 
 然后从 MiniMax Code 的 Mini App 入口打开「Token 用量看板」即可。
 
