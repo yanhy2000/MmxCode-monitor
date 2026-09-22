@@ -3,18 +3,20 @@
 
 由 Node 入口(server.mjs)按需 spawn，查询结果以单个 JSON 写到 stdout 后退出。
 不做 HTTP 监听：Mini App 运行时内 Node 到本机端口的直连不可用，子进程 stdout 是稳定通道。
-数据逻辑与仓库根目录 monitor.py 保持一致:
+数据逻辑:
   - SQLite 官方 backup API 只读快照(不锁库, 不影响运行中的 MiniMax Code)
   - 按 msg_id 跨会话去重(保留最早一条)
-  - 时间分桶 / 模型聚合 / 最近调用
+  - 时间分桶 / 模型聚合 / 项目聚合 / 工具统计 / 最近调用
 
-用法: python api.py [--range all|1h|24h|7d|30d] [--models a,b] [--db PATH]
+用法: python api.py [--range all|today|1h|12h|24h|7d|30d|<N>h] [--models a,b] [--db PATH]
+  <N>h 为自定义整数小时, 允许 1..8760
 """
 
 import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -62,16 +64,19 @@ def open_snapshot(db_path: Path) -> sqlite3.Connection:
 
 
 MSG_SQL = """
-SELECT m.created_at_ms AS ts,
-       json_extract(m.data_json,'$.context_usage_telemetry.model') AS model,
-       m.session_id,
-       m.turn_id,
-       json_extract(m.data_json,'$.usage.input_tokens')    AS inp,
-       json_extract(m.data_json,'$.usage.output_tokens')   AS outp,
-       json_extract(m.data_json,'$.usage.cache_read')      AS cr,
-       json_extract(m.data_json,'$.usage.request_duration_ms') AS dur,
-       s.title AS session_title,
-       m.msg_id
+SELECT m.created_at_ms AS ts,                            -- [0]
+       json_extract(m.data_json,'$.context_usage_telemetry.model') AS model,  -- [1]
+       m.session_id,                                     -- [2]
+       m.turn_id,                                        -- [3]
+       json_extract(m.data_json,'$.usage.input_tokens')    AS inp,   -- [4]
+       json_extract(m.data_json,'$.usage.output_tokens')   AS outp,  -- [5]
+       json_extract(m.data_json,'$.usage.cache_read')      AS cr,    -- [6]
+       json_extract(m.data_json,'$.usage.request_duration_ms') AS dur, -- [7]
+       s.title AS session_title,                         -- [8]
+       s.workspace_dir AS ws,                            -- [9]
+       (SELECT group_concat(json_extract(j.value,'$.tool_name'))
+          FROM json_each(m.data_json,'$.tool_calls') j) AS tools,    -- [10]
+       m.msg_id                                          -- [11] 去重键(保持最后一列)
 FROM local_runtime_message_rows m
 LEFT JOIN local_runtime_sessions s ON s.session_id = m.session_id
 WHERE json_extract(m.data_json,'$.usage') IS NOT NULL
@@ -115,8 +120,30 @@ def fetch_all(db_path: Path):
     return rows, ledger, dropped
 
 
-RANGE_MS = {"1h": 3600_000, "24h": 86400_000, "7d": 7 * 86400_000,
-            "30d": 30 * 86400_000, "all": None}
+RANGE_MS = {"1h": 3600_000, "12h": 12 * 3600_000, "24h": 86400_000,
+            "7d": 7 * 86400_000, "30d": 30 * 86400_000, "all": None}
+CUSTOM_RANGE_RE = re.compile(r"(\d+)h")
+MAX_CUSTOM_HOURS = 8760  # 一年, 上限防爆(下限 1, 负号/小数/超限一律不匹配)
+
+
+def is_valid_range(key: str) -> bool:
+    if key in RANGE_MS or key == "today":
+        return True
+    m = CUSTOM_RANGE_RE.fullmatch(key or "")
+    return bool(m) and 1 <= int(m.group(1)) <= MAX_CUSTOM_HOURS
+
+
+def range_cutoff_ms(range_key: str, now_ms: int):
+    """返回筛选下限(ms); None 表示不过滤(all)。today = 本地当天 00:00。"""
+    if range_key == "today":
+        lt = time.localtime(now_ms / 1000)
+        midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+        return int(midnight * 1000)
+    m = CUSTOM_RANGE_RE.fullmatch(range_key or "")
+    if m:
+        return now_ms - int(m.group(1)) * 3600_000
+    span = RANGE_MS.get(range_key)
+    return now_ms - span if span is not None else None
 
 
 def pick_bucket_step(span_ms: int) -> int:
@@ -164,14 +191,28 @@ def discover_session_files(db_path: Path) -> dict:
     return found
 
 
+TEMP_WS_RE = re.compile(r"[\\/]\.minimax[\\/]sessions[\\/]mvs_")
+
+
+def norm_workspace(ws):
+    """归一化工作区: None/空 -> 未知; mvs_* 会话临时目录 -> 归并一组; 其余取末级目录名。"""
+    if not ws:
+        return "(未知工作区)", ""
+    if TEMP_WS_RE.search(ws):
+        return "(无项目对话)", ""
+    ws = ws.replace("/", "\\")
+    name = ws.rstrip("\\").rsplit("\\", 1)[-1] or ws
+    return name, ws
+
+
 def build_payload(db_path: Path, range_key: str, models_filter=None,
                   sessions_filter=None) -> dict:
     rows_all, ledger, dedup_dropped = fetch_all(db_path)
     now_ms = int(time.time() * 1000)
-    span = RANGE_MS.get(range_key)
-    if span is not None:
-        cutoff = now_ms - span
+    cutoff = range_cutoff_ms(range_key, now_ms)
+    if cutoff is not None:
         rows_all = [r for r in rows_all if r[0] >= cutoff]
+    span = (now_ms - cutoff) if cutoff is not None else None
 
     avail = {}
     for r in rows_all:
@@ -303,6 +344,33 @@ def build_payload(db_path: Path, range_key: str, models_filter=None,
             "tok_s": round((r[5] or 0) / (dur / 1000), 1) if dur else 0,
         })
 
+    # 项目维度: 按会话工作区目录汇总(跟随当前筛选)
+    projects = {}
+    for r in rows:
+        name, wd = norm_workspace(r[9])
+        p = projects.setdefault(name, {"name": name, "dir": wd, "calls": 0,
+                                       "input": 0, "output": 0, "cache_read": 0})
+        p["calls"] += 1
+        p["input"] += r[4] or 0
+        p["output"] += r[5] or 0
+        p["cache_read"] += r[6] or 0
+    project_list = []
+    for p in sorted(projects.values(),
+                    key=lambda x: -(x["input"] + x["output"] + x["cache_read"]))[:8]:
+        project_list.append({**p, "tokens": p["input"] + p["output"] + p["cache_read"]})
+
+    # 工具调用: 从每条响应的 tool_calls 提取名称计数(跟随当前筛选)
+    tool_counter = {}
+    for r in rows:
+        names = r[10]
+        if not names:
+            continue
+        for name in names.split(","):
+            if name:
+                tool_counter[name] = tool_counter.get(name, 0) + 1
+    tool_list = [{"tool": k, "calls": v} for k, v in
+                 sorted(tool_counter.items(), key=lambda x: -x[1])[:10]]
+
     ledger_obj = None
     if ledger:
         ledger_obj = {
@@ -340,6 +408,8 @@ def build_payload(db_path: Path, range_key: str, models_filter=None,
         "session_files": len(available_sessions),
         "session_source": session_source,
         "recent": recent,
+        "projects": project_list,
+        "tools": tool_list,
         "ledger": ledger_obj,
     }
 
@@ -347,7 +417,7 @@ def build_payload(db_path: Path, range_key: str, models_filter=None,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--range", default="all", dest="range_key",
-                    help="all | 1h | 24h | 7d | 30d")
+                    help="all | today | 1h | 12h | 24h | 7d | 30d | <N>h(1..8760)")
     ap.add_argument("--models", default="", help="逗号分隔的模型列表, 留空为全部")
     ap.add_argument("--sessions", default="", help="逗号分隔的会话 id 列表, 留空为全部")
     ap.add_argument("--db", default=str(default_db_path()))
@@ -357,7 +427,7 @@ def main():
         sys.stdout.write(json.dumps(obj, ensure_ascii=False))
         sys.exit(code)
 
-    rng = args.range_key if args.range_key in RANGE_MS else "all"
+    rng = args.range_key if is_valid_range(args.range_key) else "all"
     models = [p.strip() for p in args.models.split(",") if p.strip()] or None
     sessions = [p.strip() for p in args.sessions.split(",") if p.strip()] or None
 
