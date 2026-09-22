@@ -5,21 +5,23 @@
 MiniMax Code 本地用量监控面板（Mini App 版）。装进 MiniMax Code 后随时打开，看 token 消耗、输出速度、缓存命中率和各模型的用量分布。
 
 <p align="center">
-  <img src="img/ui.png" width="720" alt="mcode-monitor 界面预览" />
+  <img src="miniapps/mcode-usage-monitor/docs/preview.png" width="720" alt="mcode-monitor 界面预览（合成数据）" />
 </p>
 
-只读读取本地数据库，不影响正在使用的 MiniMax Code，无需安装任何依赖包。
+只读读取本地数据库，不影响正在使用的 MiniMax Code，无需安装任何依赖包。包内附[英文说明](miniapps/mcode-usage-monitor/README.md)与[中文说明](miniapps/mcode-usage-monitor/README.zh-CN.md)。
 
 ## 功能
 
-- KPI 总览：token 消耗、输入 / 输出 / 缓存读取、缓存命中率、调用次数、输出速度
+- KPI 总览：token 消耗、输入 / 输出 / 缓存读取、缓存命中率、请求次数、平均输出速度
 - Token 消耗时序：按时间跨度自动分桶，缓存 + 输入堆叠柱与输出曲线
-- 模型筛选：多选下拉，实时作用于全部图表与表格
+- 模型 / 会话筛选：多选下拉（会话以真实会话文件为准），实时作用于全部图表与表格
 - 按模型拆分：一键切换为各模型的输出曲线
 - 模型对比：输入总量柱状图 + 调用次数 / 输出速度双曲线
-- 最近调用明细：时间、模型、会话、tokens、耗时、速度
+- Token 速度：最近 60 次请求的逐次 tok/s 折线
+- 最近调用明细与汇总：时间、模型、会话、tokens、耗时、速度
+- 筛选、时间范围、刷新间隔、主题会被记住
 - 亮 / 暗双主题，跟随系统
-- 时间范围：最近 1 小时 / 24 小时 / 7 天 / 30 天 / 全部
+- 时间范围：最近 1 小时 / 24 小时（默认）/ 7 天 / 30 天 / 全部
 - 自动刷新：5s / 10s / 30s / 手动
 
 ## 安装
