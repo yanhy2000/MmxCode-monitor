@@ -212,10 +212,10 @@ footer a:hover{text-decoration:underline}
 
     <label class="sub" for="range" style="position:absolute;left:-9999px">时间范围</label>
     <select id="range">
-      <option value="today" selected>今天</option>
+      <option value="today">今天</option>
       <option value="1h">最近 1 小时</option>
       <option value="12h">最近 12 小时</option>
-      <option value="24h">最近 24 小时</option>
+      <option value="24h" selected>最近 24 小时</option>
       <option value="7d">最近 7 天</option>
       <option value="30d">最近 30 天</option>
       <option value="all">全部</option>
@@ -1023,7 +1023,7 @@ $('layoutReset').onclick=()=>{
 $('refresh').onclick=load;
 
 /* ---------- 时间范围: 预设 + 自定义整数小时(1..8760) ---------- */
-let rangeApplied='today'; // 当前生效值(可能是 '<N>h' 自定义)
+let rangeApplied='24h'; // 当前生效值(可能是 '<N>h' 自定义)
 const rangeInput=$('rangeCustom');
 
 /* 输入小时数与预设等价时直接归并到预设, 避免出现同值的两条

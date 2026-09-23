@@ -26,7 +26,7 @@ Do not leave out the hidden `.minimax-plugin` directory; the plugin needs it to 
 
 Then restart a version of MiniMax Code that supports MiniApps, confirm that the plugin is enabled, and open "Token 用量看板" or ask the Agent to open it. If MiniMax Code uses a custom data directory (`MINIMAX_DATA_DIR`), put it under `plugins/` there instead.
 
-The page opens on "today" (since local midnight). You can switch between today, 1 hour, 12 hours, 24 hours, 7 days, 30 days, and all time, or enter a custom whole-hour range (1–8760 hours; only the most recent entry is kept). Model and session filtering is multi-select. The per-project breakdown groups usage by session workspace directory, and tool-call stats come from the tool calls recorded per request; both follow the current filters. Every card can be collapsed or expanded, and a collapsed card can be dragged to reorder (expanded cards cannot). The "重置布局" button at the top restores all cards to expanded and the default order without touching the filters. Filters, time range, refresh interval, theme, card collapse state, and card order are remembered between visits. The page refreshes every 10 seconds by default (5 s / 10 s / 30 s / manual).
+The page opens on the last 24 hours. You can switch between today (since local midnight), 1 hour, 12 hours, 24 hours, 7 days, 30 days, and all time, or enter a custom whole-hour range (1–8760 hours; only the most recent entry is kept). Model and session filtering is multi-select, and the session list only lists sessions with usage inside the selected range. The per-project breakdown groups usage by session workspace directory, and tool-call stats come from the tool calls recorded per request; both follow the current filters. Every card can be collapsed or expanded, and a collapsed card can be dragged to reorder (expanded cards cannot). The "重置布局" button at the top restores all cards to expanded and the default order without touching the filters. Filters, time range, refresh interval, theme, card collapse state, and card order are remembered between visits. The page refreshes every 10 seconds by default (5 s / 10 s / 30 s / manual).
 
 This app requires **Python 3.8+** on the local machine to read the local database. It uses only the standard library, so no `pip install` is needed. No API key or other configuration is required.
 
@@ -44,7 +44,7 @@ Counting rules:
 
 This is a local, near-real-time view. The in-product usage page (Settings → Usage) is the authoritative source for billing and quota; its numbers come from server-side statistics, which lag behind the local database (measured to catch up within about a day in our testing) and may use different rules.
 
-The runtime sends nothing to external services and has no telemetry. It writes a single preferences file (`prefs.json`) into the Host-provided plugin data directory. The page shows real session titles, so take care when sharing screenshots or your screen.
+The runtime sends nothing to external services and has no telemetry. It writes a single preferences file (`prefs.json`) into the Host-provided plugin data directory. The page shows real session titles, workspace directory paths (which can include your user name and project names), and tool names, so take care when sharing screenshots or your screen.
 
 ## Source and verification
 

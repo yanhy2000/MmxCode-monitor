@@ -31,9 +31,12 @@ except Exception:
     pass
 
 
+def data_dir() -> Path:
+    return Path(os.environ.get("MINIMAX_DATA_DIR") or (Path.home() / ".minimax"))
+
+
 def default_db_path() -> Path:
-    data_dir = os.environ.get("MINIMAX_DATA_DIR") or (Path.home() / ".minimax")
-    return Path(data_dir) / "v2" / "sqlite" / "runtime-state.sqlite"
+    return data_dir() / "v2" / "sqlite" / "runtime-state.sqlite"
 
 
 def open_snapshot(db_path: Path) -> sqlite3.Connection:
@@ -191,18 +194,44 @@ def discover_session_files(db_path: Path) -> dict:
     return found
 
 
-TEMP_WS_RE = re.compile(r"[\\/]\.minimax[\\/]sessions[\\/]mvs_")
+WS_UNKNOWN_KEY = "\x00unknown"
+WS_TEMP_KEY = "\x00temp"
+WS_UNKNOWN_LABEL = "(未知工作区)"
+WS_TEMP_LABEL = "(无项目对话)"
 
 
-def norm_workspace(ws):
-    """归一化工作区: None/空 -> 未知; mvs_* 会话临时目录 -> 归并一组; 其余取末级目录名。"""
+def is_temp_workspace(ws: str) -> bool:
+    """会话临时工作区固定形如 <dataDir>/sessions/mvs_<id>/workspace, 整体归并为一组。
+
+    跟随 MINIMAX_DATA_DIR: 与数据库位置同一口径。
+    """
+    base = os.path.normcase(str(data_dir()).replace("/", "\\")).rstrip("\\")
+    return os.path.normcase(str(ws).replace("/", "\\")).startswith(base + "\\sessions\\mvs_")
+
+
+def ws_parts(ws):
+    """工作区 -> (分组键, 展示用路径段, 完整路径)。
+
+    空值与临时会话目录归入固定分组, 完整路径留空; 其余按完整路径分组, 展示取末级目录。
+    """
     if not ws:
-        return "(未知工作区)", ""
-    if TEMP_WS_RE.search(ws):
-        return "(无项目对话)", ""
-    ws = ws.replace("/", "\\")
-    name = ws.rstrip("\\").rsplit("\\", 1)[-1] or ws
-    return name, ws
+        return WS_UNKNOWN_KEY, [WS_UNKNOWN_LABEL], ""
+    if is_temp_workspace(ws):
+        return WS_TEMP_KEY, [WS_TEMP_LABEL], ""
+    full = str(ws).replace("/", "\\").rstrip("\\")
+    segs = [s for s in full.split("\\") if s]
+    if not segs:
+        return WS_UNKNOWN_KEY, [WS_UNKNOWN_LABEL], ""
+    return full, segs, full
+
+
+def project_label(segs, all_segs):
+    """展示名取末级目录; 与其他项目重名时逐级补上父目录, 保证图上可区分。"""
+    for depth in range(1, len(segs) + 1):
+        label = "/".join(segs[-depth:])
+        if sum(1 for o in all_segs if "/".join(o[-depth:]) == label) == 1:
+            return label
+    return "/".join(segs)
 
 
 def build_payload(db_path: Path, range_key: str, models_filter=None,
@@ -236,12 +265,14 @@ def build_payload(db_path: Path, range_key: str, models_filter=None,
         session_source = "files"
         for sid, meta in files.items():
             st = stats.get(sid)
+            if not st:  # 当前时间范围内没有用量: 不列出(此时标题也无从取得)
+                continue
             available_sessions.append({
                 "session_id": sid,
-                "title": (st["title"] if st and st["title"] else sid),
-                "calls": st["calls"] if st else 0,
-                "tokens": st["tokens"] if st else 0,
-                "last_ts": st["last_ts"] if st else 0,
+                "title": st["title"] or sid,
+                "calls": st["calls"],
+                "tokens": st["tokens"],
+                "last_ts": st["last_ts"],
                 "file_mtime": meta["mtime"],
             })
         available_sessions.sort(key=lambda x: -x["file_mtime"])
@@ -347,17 +378,24 @@ def build_payload(db_path: Path, range_key: str, models_filter=None,
     # 项目维度: 按会话工作区目录汇总(跟随当前筛选)
     projects = {}
     for r in rows:
-        name, wd = norm_workspace(r[9])
-        p = projects.setdefault(name, {"name": name, "dir": wd, "calls": 0,
-                                       "input": 0, "output": 0, "cache_read": 0})
+        key, segs, full = ws_parts(r[9])
+        p = projects.get(key)
+        if p is None:
+            p = projects[key] = {"segs": segs, "dir": full, "calls": 0,
+                                 "input": 0, "output": 0, "cache_read": 0}
         p["calls"] += 1
         p["input"] += r[4] or 0
         p["output"] += r[5] or 0
         p["cache_read"] += r[6] or 0
+    top = sorted(projects.values(),
+                 key=lambda x: -(x["input"] + x["output"] + x["cache_read"]))[:8]
+    all_segs = [p["segs"] for p in top]
     project_list = []
-    for p in sorted(projects.values(),
-                    key=lambda x: -(x["input"] + x["output"] + x["cache_read"]))[:8]:
-        project_list.append({**p, "tokens": p["input"] + p["output"] + p["cache_read"]})
+    for p in top:
+        project_list.append({"name": project_label(p["segs"], all_segs),
+                             "dir": p["dir"], "calls": p["calls"], "input": p["input"],
+                             "output": p["output"], "cache_read": p["cache_read"],
+                             "tokens": p["input"] + p["output"] + p["cache_read"]})
 
     # 工具调用: 从每条响应的 tool_calls 提取名称计数(跟随当前筛选)
     tool_counter = {}
